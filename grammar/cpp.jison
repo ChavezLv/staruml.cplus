@@ -1,4 +1,3 @@
-
 %token IDENTIFIER 
 
 %token ABSTRACT AS  BOOL BREAK  CASE CATCH CHAR CHECKED CLASS CONST CONTINUE DECIMAL DEFAULT DELEGATE DO DOUBLE ELSE ENUM EXPLICIT EXTERN FALSE FINALLY FIXED FLOAT FOR FOREACH GOTO IF IMPLICIT   INT  INTERFACE INTERNAL   LONG NAMESPACE NEW NULL  OPERATOR  OVERRIDE PARAMS PRIVATE PROTECTED PUBLIC READONLY RETURN SBYTE SHORT SIZEOF STACKALLOC STATIC  STRUCT SWITCH THIS THROW TRUE TRY TYPEOF UINT ULONG UNCHECKED UNSAFE USHORT USING VIRTUAL VOID VOLATILE WHILE 
@@ -2840,149 +2839,322 @@ class-key
     ; 
     
 class-declaration 
-    :   class-key   class-body      identifier-list     SEMICOLON
+    :   class-key   class-body    SEMICOLON
     {
         $$ = {
             "node": "class",
             "body": $2
         };
-    }   
-    |   class-key   class-body      SEMICOLON
+    }
+    |   class-key   class-body
     {
         $$ = {
             "node": "class",
             "body": $2
         };
-    }   
-    |   class-key   identifier-list   class-suffix      identifier-list     SEMICOLON
+    }
+    |   class-key   member-name-with-double-colon     OPEN_PARENS   CLOSE_PARENS    struct-method-body
     {
         $$ = {
             "node": "class",
-            "name": $2["name"]
+            "name": $2 
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      SEMICOLON
+    }
+    |   class-key   member-name-with-double-colon     OPEN_PARENS   formal-parameter-list   CLOSE_PARENS    struct-method-body
     {
         $$ = {
             "node": "class",
-            "name": $2["name"]
+            "name": $2,
+            "parameter": $4 
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-body
+    }
+    |   class-key   type   member-name-with-double-colon    OPEN_PARENS   CLOSE_PARENS        struct-method-body
     {
         $$ = {
             "node": "class",
-            "name": $2["name"],
+            "name": $3 
+        };
+    }
+    |   class-key   type   member-name-with-double-colon    OPEN_PARENS   formal-parameter-list   CLOSE_PARENS    struct-method-body   
+    {
+        $$ = {
+            "node": "class",
+            "name": $3,
+            "parameter": $5 
+        };
+    }
+    |   class-key   member-name-with-double-colon   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "name": $2 
+        };
+    }
+    |   class-key   type   member-name-with-double-colon   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "name": $3 
+        };
+    }
+    |   class-key   member-name-with-double-colon    class-body     
+    {
+        $$ = {
+            "node": "class",
+            "name": $2, 
+            "body": $3
+        };
+    }
+    |   class-key   member-name-with-double-colon     class-body   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "name": $2, 
+            "body": $3
+        };
+    }
+    |   class-key   member-name-with-double-colon     class-body   IDENTIFIER_WITH_TEMPLATE    struct-bracket   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "name": $2,
+            "body": $3
+        };
+    }
+    |   class-key   member-name-with-double-colon     class-body   IDENTIFIER_WITH_TEMPLATE    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "name": $2, 
+            "body": $3
+        };
+    }
+    |   class-key   member-name-with-double-colon   class-base    class-body 
+    {
+        $$ = {
+            "node": "class",
+            "name": $2,
+            "base": $3,
             "body": $4
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-base      class-body   
+    }
+    |   class-key   member-name-with-double-colon   class-base    class-body   SEMICOLON
     {
         $$ = {
             "node": "class",
-            "name": $2["name"],
+            "name": $2,
+            "base": $3,
+            "body": $4
+        };
+    }
+    |   modifiers   class-key   class-body
+    {
+        $$ = {
+            "node": "class", 
+            "modifiers": $1,
+            "body": $3
+        };
+    }
+    |   modifiers   class-key   class-body    IDENTIFIER_WITH_TEMPLATE    struct-bracket   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "body": $3,
+            "name": $4
+        };
+    }
+    |   modifiers   class-key   class-body    IDENTIFIER_WITH_TEMPLATE    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "body": $3,
+            "name": $4
+        };
+    }
+    |   modifiers   class-key   member-name-with-double-colon   class-body    IDENTIFIER_WITH_TEMPLATE    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $3,
+            "body": $4
+        };
+    }
+    |   modifiers   class-key   member-name-with-double-colon   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $3 
+        };
+    }
+    |   modifiers   class-key   type   member-name-with-double-colon    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4 
+        };
+    }
+    |   modifiers   class-key   member-name-with-double-colon      class-body 
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $3,
+            "body": $4
+        };
+    }
+    |   modifiers   class-key   member-name-with-double-colon   class-base   class-body
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $3,
             "base": $4,
             "body": $5
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-body      identifier-list     SEMICOLON  
+    }
+    |   modifiers   class-key   member-name-with-double-colon     class-body   SEMICOLON
     {
         $$ = {
             "node": "class",
-            "name": $2["name"],
+            "modifiers": $1,
+            "name": $3,
             "body": $4
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-body      SEMICOLON  
+    }
+    |   modifiers   class-key   member-name-with-double-colon   class-base    class-body   SEMICOLON
     {
         $$ = {
             "node": "class",
-            "name": $2["name"],
-            "body": $4
-        };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-base      class-body   identifier-list    SEMICOLON  
-    {
-        $$ = {
-            "node": "class",
-            "name": $2["name"],
+            "modifiers": $1,
+            "name": $3,
             "base": $4,
             "body": $5
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
-    |   class-key   identifier-list   class-suffix      class-base      class-body   SEMICOLON   
+    }
+    |   modifiers   class-key   class-body   IDENTIFIER_WITH_TEMPLATE   SEMICOLON
     {
         $$ = {
             "node": "class",
-            "name": $2["name"],
-            "base": $4,
+            "modifiers": $1,
+            "name": $4,
+            "body": $3
+        };
+    }
+    |   modifiers   CONST    class-key   class-body
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1, 
+            "body": $4
+        };
+    }
+    |   modifiers   CONST    class-key   class-body    identifier-list    struct-bracket    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $5,
+            "body": $4
+        };
+    }
+    |   modifiers   CONST    class-key   class-body    identifier-list    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $5,
+            "body": $4
+        };
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon   class-body    IDENTIFIER_WITH_TEMPLATE    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4,
             "body": $5
         };
-        
-        if($2["typeParameters"]){
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        
-        if($3=="abstract"){
-            $$["modifiers"] = [ $3 ];
-        }
-    }   
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4 
+        };
+    }
+    |   modifiers   CONST    class-key   type   member-name-with-double-colon    SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $5
+        };
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon      class-body 
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4,
+            "body": $5
+        };
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon   class-base   class-body
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4,
+            "base": $5,
+            "body": $6
+        };
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon     class-body   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4,
+            "body": $5
+        };
+    }
+    |   modifiers   CONST    class-key   member-name-with-double-colon   class-base    class-body   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $4,
+            "base": $5,
+            "body": $6
+        };
+    }
+    |   modifiers   CONST    class-key   class-body   IDENTIFIER_WITH_TEMPLATE   SEMICOLON
+    {
+        $$ = {
+            "node": "class",
+            "modifiers": $1,
+            "name": $5,
+            "body": $4
+        };
+    }
+    |   CONST   class-declaration
+    {
+        $$ = $2;
+    }
+    |   class-key  class-body  IDENTIFIER_WITH_TEMPLATE  SEMICOLON
+    {
+        $$ = {
+            "node": "class", 
+            "name": $3,
+            "body": $2
+        };
+    }
     ;
 
 
@@ -4312,5 +4484,3 @@ destructor-declaration
     :   method-body
     |   ASSIGN   variable-initializer   SEMICOLON
     ;
- 
- 
