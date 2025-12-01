@@ -177,10 +177,20 @@ class CppCodeAnalyzer {
     var typeName, pathName;
     var _type = null;
 
+    // Defensive: if no type information provided, return null
+    if (type_ === undefined || type_ === null) {
+      return null;
+    }
+
     typeName = type_;
 
+    // If caller passed an object, try to read its name; otherwise bail out
     if (typeof typeName !== "string") {
-      typeName = type_.name;
+      if (type_ && typeof type_.name === "string") {
+        typeName = type_.name;
+      } else {
+        return null;
+      }
     }
 
     pathName = [typeName];
@@ -401,7 +411,7 @@ class CppCodeAnalyzer {
       // Find type and assign
       _type = this._findType(
         _typedFeature.namespace,
-        _typedFeature.node,
+        _typeName,
         _typedFeature.node.compilationUnitNode,
       );
 
