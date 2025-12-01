@@ -116,27 +116,12 @@ case 21:
     
 break;
 case 23:
- 
-    
-        this.$ = {
-            "name": $$[$0-1]
-        };
-        
-        this.$["typeParameters"] = [];
-        if ($$[$0][0] === "<" && $$[$0][$$[$0].length-1] === ">") {
-            var i, _temp, _param, _bounded;
-            $$[$0] = $$[$0].substring(1, $$[$0].length-1);
-            _temp = $$[$0].split(",");
-            for (i = 0; i < _temp.length; i++) {
-                _param = _temp[i].trim();
-                 
-                this.$["typeParameters"].push({
-                    "node": "TypeParameter",
-                    "name": _param
-                }); 
-                 
-            }
-        }
+
+        /* 为了避免在后续语义动作中把对象隐式拼接成 "[object Object]"，
+         * 这里直接返回完整的模板标识符字符串，例如 "Singleton<int>"。
+         * 如果以后需要详细的模板参数信息，可以在语义层单独重新解析这段字符串。
+         */
+        this.$ = $$[$0-1] + "" + $$[$0];
     
 break;
 case 25: case 27: case 28: case 29: case 30: case 31: case 32: case 33: case 34: case 35: case 90: case 91: case 94: case 95: case 125: case 134: case 136: case 166: case 192: case 196: case 197: case 200: case 232: case 238: case 263: case 264: case 265: case 266: case 267: case 268: case 269: case 274: case 277: case 278: case 401: case 828: case 829:
@@ -1307,35 +1292,18 @@ case 693:
 break;
 case 694:
 
-        if($$[$0]["typeParameters"]){
-            this.$["name"] =  $$[$0]["name"];
-            this.$["typeParameters"] = $$[$0]["typeParameters"];
-        }
-        else {
-            this.$["name"] =  $$[$0];
-        }
+        /* 统一只保留名字的字符串表示，避免依赖 typeParameters 对象结构 */
+        this.$["name"] =  $$[$0];
     
 break;
 case 695:
  
-        if($$[$0]["typeParameters"]){
-            this.$["name"] =  $$[$0]["name"];
-            this.$["typeParameters"] = $$[$0]["typeParameters"];
-        }
-        else {
-            this.$["name"] =  $$[$0];
-        }
+        this.$["name"] =  $$[$0];
     
 break;
 case 696:
  
-        if($$[$0]["typeParameters"]){
-            this.$["name"] = $$[$0]["name"];
-            this.$["typeParameters"] = $$[$0]["typeParameters"];
-        }
-        else {
-            this.$["name"] = $$[$0];
-        }
+        this.$["name"] = $$[$0];
     
 break;
 case 715:
@@ -1387,13 +1355,8 @@ case 730:
         this.$ = {
             "node": "class"
         };
-        if($$[$0-3]["typeParameters"]){
-            this.$["name"] = $$[$0-1]["name"];
-            this.$["typeParameters"] = $$[$0-1]["typeParameters"];
-        }
-        else {
-            this.$["name"] = $$[$0-1];
-        }
+        /* 模板类友元：这里只需要名字字符串 */
+        this.$["name"] = $$[$0-1];
     
 break;
 case 736:

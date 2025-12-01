@@ -131,27 +131,12 @@ namespace-or-type-name
     
 IDENTIFIER_WITH_TEMPLATE
     :   IDENTIFIER  TEMPLATE
-    { 
-    
-        $$ = {
-            "name": $1
-        };
-        
-        $$["typeParameters"] = [];
-        if ($2[0] === "<" && $2[$2.length-1] === ">") {
-            var i, _temp, _param, _bounded;
-            $2 = $2.substring(1, $2.length-1);
-            _temp = $2.split(",");
-            for (i = 0; i < _temp.length; i++) {
-                _param = _temp[i].trim();
-                 
-                $$["typeParameters"].push({
-                    "node": "TypeParameter",
-                    "name": _param
-                }); 
-                 
-            }
-        }
+    {
+        /* 为了避免在后续语义动作中把对象隐式拼接成 "[object Object]"，
+         * 这里直接返回完整的模板标识符字符串，例如 "Singleton<int>"。
+         * 如果以后需要详细的模板参数信息，可以在语义层单独重新解析这段字符串。
+         */
+        $$ = $1 + "" + $2;
     }
     |   IDENTIFIER
     {
@@ -3162,33 +3147,16 @@ class-declaration
 identifier-list
     :   identifier-list    DOUBLE_COLON   IDENTIFIER_WITH_TEMPLATE
     {
-        if($3["typeParameters"]){
-            $$["name"] =  $3["name"];
-            $$["typeParameters"] = $3["typeParameters"];
-        }
-        else {
-            $$["name"] =  $3;
-        }
+        /* 统一只保留名字的字符串表示，避免依赖 typeParameters 对象结构 */
+        $$["name"] =  $3;
     }   
     |   identifier-list    IDENTIFIER_WITH_TEMPLATE
     { 
-        if($2["typeParameters"]){
-            $$["name"] =  $2["name"];
-            $$["typeParameters"] = $2["typeParameters"];
-        }
-        else {
-            $$["name"] =  $2;
-        }
+        $$["name"] =  $2;
     }   
     |   IDENTIFIER_WITH_TEMPLATE
     { 
-        if($1["typeParameters"]){
-            $$["name"] = $1["name"];
-            $$["typeParameters"] = $1["typeParameters"];
-        }
-        else {
-            $$["name"] = $1;
-        }
+        $$["name"] = $1;
     }   
     ;
 
@@ -3363,13 +3331,8 @@ class-member-declaration
         $$ = {
             "node": "class"
         };
-        if($1["typeParameters"]){
-            $$["name"] = $3["name"];
-            $$["typeParameters"] = $3["typeParameters"];
-        }
-        else {
-            $$["name"] = $3;
-        }
+        /* 模板类友元：这里只需要名字字符串 */
+        $$["name"] = $3;
     }   
     |   class-declaration
     {

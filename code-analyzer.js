@@ -296,7 +296,31 @@ class CppCodeAnalyzer {
     // collapse whitespace and trim
     name = name.replace(/\s+/g, " ").trim();
 
+    // 为了让签名更简洁，把 C++ 标准库命名空间 std:: 隐藏掉
+    // 例如：std::pair<int, std::string> -> pair<int, string>
+    name = name.replace(/\bstd::/g, "");
+
     return name;
+  }
+
+  /**
+   * Safely extract a string name from parser nodes.
+   * 有些语法节点的 name 可能是对象（例如 {name:'Singleton', typeParameters:[...]}），
+   * 这里统一收敛成字符串，避免把整个对象直接写进模型导致 Writer 报错。
+   * @param {string|Object} nodeOrName
+   * @return {string}
+   */
+  _toName(nodeOrName) {
+    if (typeof nodeOrName === "string") {
+      return nodeOrName;
+    }
+    if (!nodeOrName) {
+      return "";
+    }
+    if (typeof nodeOrName.name === "string") {
+      return nodeOrName.name;
+    }
+    return String(nodeOrName);
   }
 
   /**
@@ -454,18 +478,30 @@ class CppCodeAnalyzer {
         if (_itemTypeName) {
           _typeName = _itemTypeName;
           _typedFeature.feature.multiplicity = "*";
+
+          // collection 标签只需要一个可序列化的字符串，避免把整个 AST 对象塞进去
+          var _collRaw = _typedFeature.node.type;
+          var _collText =
+            typeof _collRaw === "string"
+              ? _collRaw
+              : this._normalizeTypeName(_collRaw) ||
+                (typeof _collRaw === "object"
+                  ? JSON.stringify(_collRaw)
+                  : String(_collRaw));
+
           this._addTag(
             _typedFeature.feature,
             type.Tag.TK_STRING,
             "collection",
-            _typedFeature.node.type,
+            _collText,
           );
         }
 
         // normalize the type name (strip const/*/&/templates)
         var _norm = this._normalizeTypeName(_typeName);
 
-        // If normalization produced nothing (e.g. parser couldn't determine type), skip safely
+        // If normalization produced nothing (e.g. parser couldn't determine type),
+        // 避免把 JS 对象直接变成 "[object Object]"，直接视为未知类型。
         if (!_norm || typeof _norm !== "string") {
           _typedFeature.feature.type = null;
           continue;
@@ -557,7 +593,7 @@ class CppCodeAnalyzer {
     // Create Enumeration
     _enum = new type.UMLEnumeration();
     _enum._parent = namespace;
-    _enum.name = enumNode.name;
+    _enum.name = this._toName(enumNode.name);
     _enum.visibility = this._getVisibility(enumNode.modifiers);
 
     // CppDoc
@@ -583,12 +619,24 @@ class CppCodeAnalyzer {
   translateClass(options, namespace, classNode) {
     var i, len, _class;
 
-    // Create Class
-    _class = new type.UMLClass();
-    _class._parent = namespace;
-    _class.name = classNode.name;
+    // 跳过纯前置声明：例如 "class EventLoop;"、"class TcpConnection;"
+    // 这类产生式在 AST 中不会带有 body 属性，而真正的类定义（即便是空类）
+    // 也会通过 "body": $2 这样的语义动作生成 body 属性（值可能是 undefined）。
+    if (!Object.prototype.hasOwnProperty.call(classNode, "body")) {
+      return;
+    }
 
-    // Access Modifiers
+    // Create or reuse Class，避免生成重复的空同名类
+    var className = this._toName(classNode.name);
+    _class = namespace.findByName(className);
+    if (!_class || !(_class instanceof type.UMLClass)) {
+      _class = new type.UMLClass();
+      _class._parent = namespace;
+      _class.name = className;
+      namespace.ownedElements.push(_class);
+    }
+
+    // Access Modifiers（后出现的声明可以覆盖前面的可见性）
     _class.visibility = this._getVisibility(classNode.modifiers);
 
     // Abstract Class
@@ -602,8 +650,6 @@ class CppCodeAnalyzer {
     //        if (classNode.comment) {
     //            _class.documentation = classNode.comment;
     //        }
-
-    namespace.ownedElements.push(_class);
 
     // Register Extends for 2nd Phase Translation
     if (classNode["base"]) {
@@ -686,10 +732,10 @@ class CppCodeAnalyzer {
     var i, len;
     var _operation = new type.UMLOperation();
     _operation._parent = namespace;
-    _operation.name = methodNode.name;
+    _operation.name = this._toName(methodNode.name);
 
     if (!isConstructor) {
-      _operation.name = methodNode.name;
+      _operation.name = this._toName(methodNode.name);
     }
 
     namespace.operations.push(_operation);
@@ -768,7 +814,7 @@ class CppCodeAnalyzer {
   translateParameter(options, namespace, parameterNode) {
     var _parameter = new type.UMLParameter();
     _parameter._parent = namespace;
-    _parameter.name = parameterNode.name;
+    _parameter.name = this._toName(parameterNode.name);
     // Set parameter direction to 'in' so it displays correctly in diagrams
     _parameter.direction = type.UMLParameter.DK_IN;
     namespace.parameters.push(_parameter);
@@ -796,7 +842,7 @@ class CppCodeAnalyzer {
         // Create Attribute
         var _attribute = new type.UMLAttribute();
         _attribute._parent = namespace;
-        _attribute.name = variableNode.name;
+        _attribute.name = this._toName(variableNode.name);
 
         // Access Modifiers
         _attribute.visibility = this._getVisibility(fieldNode.modifiers);
@@ -848,7 +894,21 @@ class CppCodeAnalyzer {
     tag.kind = kind;
     switch (kind) {
       case type.Tag.TK_STRING:
-        tag.value = value;
+        // Writer 要求 value 必须是 string/number/boolean，这里统一做一次安全转换
+        if (
+          typeof value !== "string" &&
+          typeof value !== "number" &&
+          typeof value !== "boolean"
+        ) {
+          try {
+            // 尽量以 JSON 形式保留信息
+            tag.value = JSON.stringify(value);
+          } catch (e) {
+            tag.value = String(value);
+          }
+        } else {
+          tag.value = value;
+        }
         break;
       case type.Tag.TK_BOOLEAN:
         tag.checked = value;
@@ -860,7 +920,20 @@ class CppCodeAnalyzer {
         tag.reference = value;
         break;
       case type.Tag.TK_HIDDEN:
-        tag.value = value;
+        // 对 HIDDEN 同样做一次类型规整，避免把对象直接塞进去
+        if (
+          typeof value !== "string" &&
+          typeof value !== "number" &&
+          typeof value !== "boolean"
+        ) {
+          try {
+            tag.value = JSON.stringify(value);
+          } catch (e2) {
+            tag.value = String(value);
+          }
+        } else {
+          tag.value = value;
+        }
         break;
     }
     elem.tags.push(tag);
