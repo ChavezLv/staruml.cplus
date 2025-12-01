@@ -336,7 +336,7 @@ class CppCodeAnalyzer {
     var i, len, j, len2, _typeName, _type, _itemTypeName, _itemType, _pathName;
 
     // Create Generalizations
-    //     if super type not found, create a Class correspond to the super type.
+    //     if super type not found, selectively create a Class correspond to the super type.
     for (i = 0, len = this._extendPendings.length; i < len; i++) {
       var _extend = this._extendPendings[i];
       _typeName = _extend.node;
@@ -347,10 +347,20 @@ class CppCodeAnalyzer {
       );
 
       if (!_type) {
-        //                _pathName = this._toPathName(_typeName);
+        // 如果找不到基类，只在类型名是“简单标识符/命名空间名”时才自动建类，
+        // 避免生成诸如 "Singleton<CacheManager>"、"LRUCache&" 这类垃圾类名。
         var _normName = this._normalizeTypeName(_typeName);
-        _pathName = [_normName];
-        _type = this._ensureClass(this._root, _pathName);
+        if (
+          _normName &&
+          typeof _normName === "string" &&
+          /^[A-Za-z_]\w*(::[A-Za-z_]\w*)*$/.test(_normName)
+        ) {
+          _pathName = [_normName];
+          _type = this._ensureClass(this._root, _pathName);
+        } else {
+          // 不创建对应的 UMLClass，直接跳过这条继承关系
+          continue;
+        }
       }
 
       var generalization = new type.UMLGeneralization();
@@ -515,9 +525,10 @@ class CppCodeAnalyzer {
           var m = _norm.match(/^std::(string|wstring|u16string|u32string)$/);
           _typedFeature.feature.type = m ? m[1] : _norm;
         } else {
-          _pathName = [_norm];
-          var _newClass = this._ensureClass(this._root, _pathName);
-          _typedFeature.feature.type = _newClass;
+          // 对于非原生/非 std:: 基础类型，如果在模型中没有定义对应类，
+          // 不再强行创建一个独立 UMLClass（例如 "LRUCache&"、"list<pair<string,string>>&"）。
+          // 直接把规范化后的类型名当作字符串类型使用即可。
+          _typedFeature.feature.type = _norm;
         }
       }
 
