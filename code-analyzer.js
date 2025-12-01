@@ -63,6 +63,9 @@ var cppPrimitiveTypes = [
   "unsigned long long",
 ];
 
+// common typedefs and library types that shouldn't become classes
+cppPrimitiveTypes.push("size_t");
+
 /**
  * C++ Code Analyzer
  */
@@ -264,6 +267,39 @@ class CppCodeAnalyzer {
   }
 
   /**
+   * Normalize a type name by removing cv-qualifiers, pointers/references
+   * and simple template arguments so the analyzer doesn't create
+   * spurious classes for things like `const Foo &` or `std::string`.
+   * @param {string} typeName
+   * @return {string}
+   */
+  _normalizeTypeName(typeName) {
+    if (!typeName) return typeName;
+    var name = typeName;
+    if (typeof name !== "string") {
+      if (name && typeof name.name === "string") {
+        name = name.name;
+      } else {
+        name = String(name);
+      }
+    }
+
+    // remove template arguments (best-effort, won't handle deeply-nested templates)
+    //name = name.replace(/<[^<>]*>/g, "");
+
+    // remove cv-qualifiers and keywords
+    //name = name.replace(/\b(const|volatile|struct|class)\b/g, "");
+
+    // remove pointer/reference symbols
+    //name = name.replace(/[&*]/g, "");
+
+    // collapse whitespace and trim
+    name = name.replace(/\s+/g, " ").trim();
+
+    return name;
+  }
+
+  /**
    * Perform Second Phase
    *   - Create Generalizations
    *   - Create InterfaceRealizations
@@ -288,12 +324,9 @@ class CppCodeAnalyzer {
 
       if (!_type) {
         //                _pathName = this._toPathName(_typeName);
-        _pathName = [_typeName];
-        //                if (_extend.kind === "interface") {
-        //                    _type = this._ensureInterface(this._root, _pathName);
-        //                } else {
+        var _normName = this._normalizeTypeName(_typeName);
+        _pathName = [_normName];
         _type = this._ensureClass(this._root, _pathName);
-        //                }
       }
 
       var generalization = new type.UMLGeneralization();
@@ -343,17 +376,10 @@ class CppCodeAnalyzer {
           association.end1.navigable = false;
 
           // Set End2
-          if (_itemType) {
-            association.end2.reference = _itemType;
-            association.end2.multiplicity = "*";
-            this._addTag(
-              association.end2,
-              type.Tag.TK_STRING,
-              "collection",
-              _asso.node.type.qualifiedName.name,
-            );
-          } else {
+          if (_type) {
             association.end2.reference = _type;
+          } else if (_itemType) {
+            association.end2.reference = _itemType;
           }
           association.end2.name = variableNode.name;
           association.end2.visibility = this._getVisibility(
@@ -418,8 +444,8 @@ class CppCodeAnalyzer {
       // if type is exists
       if (_type) {
         _typedFeature.feature.type = _type;
-        // if type is not exists
       } else {
+        // if type is not exists
         // if type is generic collection type (e.g. java.util.List<String>)
         _itemTypeName = this._isGenericCollection(
           _typedFeature.node.type,
@@ -436,12 +462,24 @@ class CppCodeAnalyzer {
           );
         }
 
-        // if type is primitive type
-        if (cppPrimitiveTypes.includes(_typeName)) {
-          _typedFeature.feature.type = _typeName;
-          // otherwise
+        // normalize the type name (strip const/*/&/templates)
+        var _norm = this._normalizeTypeName(_typeName);
+
+        // If normalization produced nothing (e.g. parser couldn't determine type), skip safely
+        if (!_norm || typeof _norm !== "string") {
+          _typedFeature.feature.type = null;
+          continue;
+        }
+
+        // treat common library types and primitives as opaque (no class creation)
+        if (cppPrimitiveTypes.includes(_norm) || /^[a-z0-9_]+_t$/i.test(_norm)) {
+          _typedFeature.feature.type = _norm;
+        } else if (_norm.indexOf("std::") === 0) {
+          // For std:: types, strip std:: only for common string types
+          var m = _norm.match(/^std::(string|wstring|u16string|u32string)$/);
+          _typedFeature.feature.type = m ? m[1] : _norm;
         } else {
-          _pathName = [_typeName];
+          _pathName = [_norm];
           var _newClass = this._ensureClass(this._root, _pathName);
           _typedFeature.feature.type = _newClass;
         }
@@ -731,6 +769,8 @@ class CppCodeAnalyzer {
     var _parameter = new type.UMLParameter();
     _parameter._parent = namespace;
     _parameter.name = parameterNode.name;
+    // Set parameter direction to 'in' so it displays correctly in diagrams
+    _parameter.direction = type.UMLParameter.DK_IN;
     namespace.parameters.push(_parameter);
 
     // Add to _typedFeaturePendings
