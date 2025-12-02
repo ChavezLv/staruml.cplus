@@ -109,6 +109,11 @@ class CppCodeAnalyzer {
      */
     this._typedFeaturePendings = [];
 
+    /**
+     * @member {{source:type.UMLClassifier, targetTypeName:string, node:Object}}
+     */
+    this._dependencyPendings = [];
+
     this._usingList = [];
   }
 
@@ -284,15 +289,6 @@ class CppCodeAnalyzer {
       }
     }
 
-    // remove template arguments (best-effort, won't handle deeply-nested templates)
-    //name = name.replace(/<[^<>]*>/g, "");
-
-    // remove cv-qualifiers and keywords
-    //name = name.replace(/\b(const|volatile|struct|class)\b/g, "");
-
-    // remove pointer/reference symbols
-    //name = name.replace(/[&*]/g, "");
-
     // collapse whitespace and trim
     name = name.replace(/\s+/g, " ").trim();
 
@@ -300,6 +296,32 @@ class CppCodeAnalyzer {
     // 例如：std::pair<int, std::string> -> pair<int, string>
     name = name.replace(/\bstd::/g, "");
 
+    return name;
+  }
+
+  /**
+   * Extract base type name from a type string, removing template arguments
+   * and other qualifiers for dependency resolution.
+   * @param {string} typeName
+   * @return {string}
+   */
+  _extractBaseTypeName(typeName) {
+    if (!typeName) return typeName;
+    var name = this._normalizeTypeName(typeName);
+    
+    // Remove template arguments for dependency resolution
+    // This helps find the actual class type without template parameters
+    name = name.replace(/<[^<>]*>/g, "");
+    
+    // Remove cv-qualifiers and keywords
+    name = name.replace(/\b(const|volatile|struct|class)\b/g, "");
+    
+    // Remove pointer/reference symbols
+    name = name.replace(/[&*]/g, "");
+    
+    // Collapse whitespace and trim
+    name = name.replace(/\s+/g, " ").trim();
+    
     return name;
   }
 
@@ -335,7 +357,7 @@ class CppCodeAnalyzer {
   performSecondPhase(options) {
     var i, len, j, len2, _typeName, _type, _itemTypeName, _itemType, _pathName;
 
-    // Create Generalizations
+    // Create Generalizations and Dependencies for base classes
     //     if super type not found, selectively create a Class correspond to the super type.
     for (i = 0, len = this._extendPendings.length; i < len; i++) {
       var _extend = this._extendPendings[i];
@@ -420,6 +442,22 @@ class CppCodeAnalyzer {
             _asso.node.modifiers,
           );
           association.end2.navigable = true;
+
+          // Determine aggregation type based on C++ type
+          // - Composition (aggregation=2): value types, unique_ptr
+          // - Aggregation (aggregation=1): pointer types, shared_ptr
+          // - Association (aggregation=0): reference types, others
+          const typeStr = this._toName(_asso.node.type);
+          if (typeStr.includes("unique_ptr") || !typeStr.includes("*") && !typeStr.includes("&") && !typeStr.includes("shared_ptr")) {
+            // Composition: value types or unique_ptr
+            association.end2.aggregation = 2; // 2 = Composition
+          } else if (typeStr.includes("*") || typeStr.includes("shared_ptr")) {
+            // Aggregation: pointer types or shared_ptr
+            association.end2.aggregation = 1; // 1 = Aggregation
+          } else {
+            // Association: reference types or others
+            association.end2.aggregation = 0; // 0 = None
+          }
 
           // Final Modifier
           if (_asso.node.modifiers && _asso.node.modifiers.includes("final")) {
@@ -541,6 +579,32 @@ class CppCodeAnalyzer {
           }
         }
         _typedFeature.feature.multiplicity = _dim.join(",");
+      }
+    }
+
+    // Create Dependencies (avoid duplicates)
+    var createdDependencies = new Set();
+    for (i = 0, len = this._dependencyPendings.length; i < len; i++) {
+      var _dep = this._dependencyPendings[i];
+      _typeName = _dep.targetTypeName;
+      _type = this._findType(
+        _dep.source,
+        _typeName,
+        _dep.node.compilationUnitNode,
+      );
+
+      if (_type) {
+        // Create a unique key for this dependency
+        var depKey = _dep.source._id + "->" + _type._id;
+        if (!createdDependencies.has(depKey)) {
+          // Create Dependency
+          var dependency = new type.UMLDependency();
+          dependency._parent = _dep.source;
+          dependency.source = _dep.source;
+          dependency.target = _type;
+          _dep.source.ownedElements.push(dependency);
+          createdDependencies.add(depKey);
+        }
       }
     }
   }
@@ -771,6 +835,16 @@ class CppCodeAnalyzer {
         var parameterNode = methodNode.parameter[i];
         parameterNode.compilationUnitNode = methodNode.compilationUnitNode;
         this.translateParameter(options, _operation, parameterNode);
+        
+        // Add dependency for parameter type
+        var paramTypeName = this._extractBaseTypeName(parameterNode.type);
+        if (paramTypeName && typeof paramTypeName === "string" && paramTypeName !== "" && !cppPrimitiveTypes.includes(paramTypeName)) {
+          this._dependencyPendings.push({
+            source: namespace,
+            targetTypeName: paramTypeName,
+            node: parameterNode,
+          });
+        }
       }
     }
 
@@ -787,6 +861,16 @@ class CppCodeAnalyzer {
         node: methodNode,
       });
       _operation.parameters.push(_returnParam);
+      
+      // Add dependency for return type
+      var returnTypeName = this._extractBaseTypeName(methodNode.type);
+      if (returnTypeName && typeof returnTypeName === "string" && returnTypeName !== "" && !cppPrimitiveTypes.includes(returnTypeName)) {
+        this._dependencyPendings.push({
+          source: namespace,
+          targetTypeName: returnTypeName,
+          node: methodNode,
+        });
+      }
     }
 
     // Throws
@@ -887,6 +971,16 @@ class CppCodeAnalyzer {
           node: fieldNode,
         };
         this._typedFeaturePendings.push(_typedFeature);
+        
+        // Add dependency for attribute type
+        var attrTypeName = this._extractBaseTypeName(fieldNode.type);
+        if (attrTypeName && typeof attrTypeName === "string" && attrTypeName !== "" && !cppPrimitiveTypes.includes(attrTypeName)) {
+          this._dependencyPendings.push({
+            source: namespace,
+            targetTypeName: attrTypeName,
+            node: fieldNode,
+          });
+        }
       }
     }
   }

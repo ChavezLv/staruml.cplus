@@ -2739,14 +2739,14 @@ using-directive
     ;
 
 using-alias-directive
-    :   USING   NAMESPACE   IDENTIFIER_WITH_TEMPLATE   ASSIGN   namespace-or-type-name   SEMICOLON
-    {
-        $$ = {
-            "node" : "using",
-            "name" : $3
-        };
-    }
-    |   USING   IDENTIFIER_WITH_TEMPLATE   ASSIGN   namespace-or-type-name   SEMICOLON
+	:   USING   NAMESPACE   IDENTIFIER_WITH_TEMPLATE   ASSIGN   type   SEMICOLON
+	{
+		$$ = {
+			"node" : "using",
+			"name" : $3
+		};
+	}
+	|   USING   IDENTIFIER_WITH_TEMPLATE   ASSIGN   type   SEMICOLON
     {
         $$ = {
             "node" : "using",
