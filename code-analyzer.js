@@ -167,9 +167,58 @@ class CppCodeAnalyzer {
     if (options.packageOverview) {
       baseModel.traverse((elem) => {
         if (elem instanceof type.UMLPackage) {
+          // Check if this is the root package containing only one namespace
+          var isRootWithSingleNamespace = elem === baseModel && elem.ownedElements.length === 1 && 
+                                          elem.ownedElements[0] instanceof type.UMLPackage;
+          
+          // Skip if it's the root package with only one namespace
+          if (isRootWithSingleNamespace) {
+            return;
+          }
+          
+          // Check if namespace is empty (no classes or interfaces)
+          var hasClassesOrInterfaces = false;
+          for (var i = 0; i < elem.ownedElements.length; i++) {
+            var child = elem.ownedElements[i];
+            if (child instanceof type.UMLClass || child instanceof type.UMLInterface || 
+                child instanceof type.UMLEnumeration) {
+              hasClassesOrInterfaces = true;
+              break;
+            }
+          }
+          
+          // Skip if namespace is empty
+          if (!hasClassesOrInterfaces) {
+            return;
+          }
+          
+          // Create two versions of overview for all non-empty namespaces
+          // 1. Simple version without detailed attributes
           app.commands.execute("diagram-generator:overview", elem, true);
+          this._renameDiagram(elem, elem.name + ' Overview (Simple)');
+          
+          // 2. Detailed version with complete attributes and methods
+          app.commands.execute("diagram-generator:overview-expanded", elem, true);
+          this._renameDiagram(elem, elem.name + ' Overview (Detailed)');
         }
       });
+    }
+  }
+  
+  /**
+   * Rename the last generated diagram in the package
+   * @param {type.UMLPackage} pkg
+   * @param {string} newName
+   */
+  _renameDiagram(pkg, newName) {
+    // Find the last generated diagram (Overview)
+    for (var i = pkg.ownedElements.length - 1; i >= 0; i--) {
+      var elem = pkg.ownedElements[i];
+      if (elem instanceof type.UMLClassDiagram && elem.name === 'Overview') {
+        // Rename it
+        elem.name = newName;
+        break;
+      }
     }
   }
 
