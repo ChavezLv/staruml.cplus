@@ -41,6 +41,11 @@ function getRevOptions() {
     typeHierarchy: app.preferences.get("cpp.rev.typeHierarchy"),
     packageOverview: app.preferences.get("cpp.rev.packageOverview"),
     packageStructure: app.preferences.get("cpp.rev.packageStructure"),
+    uniquePtrAsComposition: app.preferences.get("cpp.rev.uniquePtrAsComposition"),
+    pointerAsAggregation: app.preferences.get("cpp.rev.pointerAsAggregation"),
+    referenceAsAssociation: app.preferences.get("cpp.rev.referenceAsAssociation"),
+    packageOverviewSimple: app.preferences.get("cpp.rev.packageOverviewSimple"),
+    packageOverviewDetailed: app.preferences.get("cpp.rev.packageOverviewDetailed"),
   };
 }
 

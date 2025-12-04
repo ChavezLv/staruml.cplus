@@ -70,5 +70,36 @@
       "type": "check",
       "default": true
     }
+    ,
+    "cpp.rev.uniquePtrAsComposition": {
+      "text": "Treat unique_ptr as Composition",
+      "description": "Customize: Map unique_ptr fields to Composition",
+      "type": "check",
+      "default": true
+    },
+    "cpp.rev.pointerAsAggregation": {
+      "text": "Treat pointers as Aggregation",
+      "description": "Customize:Map raw/shared pointers to Aggregation",
+      "type": "check",
+      "default": true
+    },
+    "cpp.rev.referenceAsAssociation": {
+      "text": "Treat references as Association",
+      "description": "Customize:Map reference types to Association",
+      "type": "check",
+      "default": true
+    },
+    "cpp.rev.packageOverviewSimple": {
+      "text": "Generate Simple Overview",
+      "description": "Customize:Generate simple package overview diagrams,need to choose Package Overview Diagram in Preferences",
+      "type": "check",
+      "default": true
+    },
+    "cpp.rev.packageOverviewDetailed": {
+      "text": "Generate Detailed Overview",
+      "description": "Customize:Generate detailed package overview diagrams,need to choose Package Overview Diagram in Preferences",
+      "type": "check",
+      "default": true
+    }
   }
 }

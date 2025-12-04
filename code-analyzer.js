@@ -167,39 +167,31 @@ class CppCodeAnalyzer {
     if (options.packageOverview) {
       baseModel.traverse((elem) => {
         if (elem instanceof type.UMLPackage) {
-          // Check if this is the root package containing only one namespace
-          var isRootWithSingleNamespace = elem === baseModel && elem.ownedElements.length === 1 && 
-                                          elem.ownedElements[0] instanceof type.UMLPackage;
-          
-          // Skip if it's the root package with only one namespace
+          var isRootWithSingleNamespace = elem === baseModel && elem.ownedElements.length === 1 &&
+            elem.ownedElements[0] instanceof type.UMLPackage;
           if (isRootWithSingleNamespace) {
             return;
           }
-          
-          // Check if namespace is empty (no classes or interfaces)
           var hasClassesOrInterfaces = false;
           for (var i = 0; i < elem.ownedElements.length; i++) {
             var child = elem.ownedElements[i];
-            if (child instanceof type.UMLClass || child instanceof type.UMLInterface || 
-                child instanceof type.UMLEnumeration) {
+            if (child instanceof type.UMLClass || child instanceof type.UMLInterface ||
+              child instanceof type.UMLEnumeration) {
               hasClassesOrInterfaces = true;
               break;
             }
           }
-          
-          // Skip if namespace is empty
           if (!hasClassesOrInterfaces) {
             return;
           }
-          
-          // Create two versions of overview for all non-empty namespaces
-          // 1. Simple version without detailed attributes
-          app.commands.execute("diagram-generator:overview", elem, true);
-          this._renameDiagram(elem, elem.name + ' Overview (Simple)');
-          
-          // 2. Detailed version with complete attributes and methods
-          app.commands.execute("diagram-generator:overview-expanded", elem, true);
-          this._renameDiagram(elem, elem.name + ' Overview (Detailed)');
+          if (options.packageOverviewSimple) {
+            app.commands.execute("diagram-generator:overview", elem, true);
+            this._renameDiagram(elem, elem.name + ' Overview (Simple)');
+          }
+          if (options.packageOverviewDetailed) {
+            app.commands.execute("diagram-generator:overview-expanded", elem, true);
+            this._renameDiagram(elem, elem.name + ' Overview (Detailed)');
+          }
         }
       });
     }
@@ -492,21 +484,21 @@ class CppCodeAnalyzer {
           );
           association.end2.navigable = true;
 
-          // Determine aggregation type based on C++ type
-          // - Composition (aggregation=2): value types, unique_ptr
-          // - Aggregation (aggregation=1): pointer types, shared_ptr
-          // - Association (aggregation=0): reference types, others
           const typeStr = this._toName(_asso.node.type);
-          if (typeStr.includes("unique_ptr") || !typeStr.includes("*") && !typeStr.includes("&") && !typeStr.includes("shared_ptr")) {
-            // Composition: value types or unique_ptr
-            association.end2.aggregation = 2; // 2 = Composition
+          const uniquePtrAsComposition = options && options.uniquePtrAsComposition !== false;
+          const pointerAsAggregation = options && options.pointerAsAggregation !== false;
+          const referenceAsAssociation = options && options.referenceAsAssociation !== false;
+          let agg = 0;
+          if (typeStr.includes("unique_ptr")) {
+            agg = uniquePtrAsComposition ? 2 : (pointerAsAggregation ? 1 : 0);
           } else if (typeStr.includes("*") || typeStr.includes("shared_ptr")) {
-            // Aggregation: pointer types or shared_ptr
-            association.end2.aggregation = 1; // 1 = Aggregation
+            agg = pointerAsAggregation ? 1 : 0;
+          } else if (typeStr.includes("&")) {
+            agg = referenceAsAssociation ? 0 : 1;
           } else {
-            // Association: reference types or others
-            association.end2.aggregation = 0; // 0 = None
+            agg = 2;
           }
+          association.end2.aggregation = agg;
 
           // Final Modifier
           if (_asso.node.modifiers && _asso.node.modifiers.includes("final")) {
