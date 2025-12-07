@@ -9,6 +9,7 @@
           "submenu": [
             { "label": "Generate Code...", "id": "tools.cpp.generate", "command": "cpp:generate" },
             { "label": "Reverse Code...", "id": "tools.cpp.reverse", "command": "cpp:reverse" },
+            { "label": "Reverse from json...", "id": "tools.cpp.reverse-from-json", "command": "cpp:reverse-from-json" },
             { "type": "separator" },
             { "label": "Configure...", "id": "tools.cpp.configure", "command": "cpp:configure" }
           ]

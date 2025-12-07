@@ -23,6 +23,7 @@
 
 const codeGenerator = require("./code-generator");
 const codeAnalyzer = require("./code-analyzer");
+const jsonAnalyzer = require("./analyze-from-json");
 
 function getGenOptions() {
   return {
@@ -132,6 +133,32 @@ async function _handleReverse(basePath, options) {
   }
 }
 
+/**
+ * Command Handler for C++ Reverse from JSON
+ *
+ * @param {string} basePath
+ * @param {Object} options
+ */
+async function _handleReverseFromJson(basePath, options) {
+  // If options is not passed, get from preference
+  options = getRevOptions();
+  // If basePath is not assigned, popup Open Dialog to select a folder
+  if (!basePath) {
+    var files = await app.dialogs.showOpenDialogAsync(
+      "Select Folder",
+      null,
+      null,
+      {
+        properties: ["openDirectory"],
+      },
+    );
+    if (files && files.length > 0) {
+      basePath = files[0];
+      jsonAnalyzer.analyzeJson(basePath, options);
+    }
+  }
+}
+
 function _handleConfigure() {
   app.commands.execute("application:preferences", "cpp");
 }
@@ -139,6 +166,7 @@ function _handleConfigure() {
 function init() {
   app.commands.register("cpp:generate", _handleGenerate);
   app.commands.register("cpp:reverse", _handleReverse);
+  app.commands.register("cpp:reverse-from-json", _handleReverseFromJson);
   app.commands.register("cpp:configure", _handleConfigure);
 }
 
