@@ -30,15 +30,22 @@ const path = require("path");
 class JsonCodeAnalyzer {
   /**
    * @constructor
+   * @param {Object} options - Options for the analyzer
    * @param {string} modelName - Name for the UMLModel
    */
   constructor(options = {}, modelName = "CppReverse") {
-    /** @member {type.UMLModel} */
+    // For class diagrams, we create a UMLModel
     this._root = new type.UMLModel();
     this._root.name = modelName;
 
     // Map to store class ID to class object for inheritance processing
     this._classIdMap = {};
+    
+    // For sequence diagrams
+    this._collaboration = null;
+    this._interaction = null;
+    this._sequenceDiagram = null;
+    this._participantMap = {};
   }
 
   /**
@@ -48,10 +55,19 @@ class JsonCodeAnalyzer {
   addJsonFile(jsonPath) {
     try {
       const jsonContent = fs.readFileSync(jsonPath, "utf8");
-      const classDiagram = JSON.parse(jsonContent);
+      const diagramJson = JSON.parse(jsonContent);
       
-      // Process the class diagram
-      this.translateJsonClassDiagram({}, this._root, classDiagram);
+      // Check diagram type
+      const diagramType = diagramJson.diagram_type || "class";
+      
+      // Process based on diagram type
+      if (diagramType === "sequence") {
+        // Process sequence diagram
+        this.translateJsonSequenceDiagram({}, diagramJson);
+      } else {
+        // Process as class diagram
+        this.translateJsonClassDiagram({}, this._root, diagramJson);
+      }
     } catch (err) {
       console.error(`Error parsing JSON file ${jsonPath}:`, err);
     }
@@ -62,14 +78,33 @@ class JsonCodeAnalyzer {
    * @param {Object} options
    */
   analyze(options) {
-    // Load To Project
-    var writer = new app.repository.Writer();
-    writer.writeObj("data", this._root);
-    var json = writer.current.data;
-    app.project.importFromJson(app.project.getProject(), json);
+    if (this._collaboration) {
+      // For sequence diagram, import the collaboration (which contains interaction and sequence diagram)
+      var writer = new app.repository.Writer();
+      writer.writeObj("data", this._collaboration);
+      var json = writer.current.data;
+      app.project.importFromJson(app.project.getProject(), json);
+      
+      // Sequence diagram structure has been imported successfully
+      console.log("[JSON Reverse Engineer] Sequence diagram structure imported:");
+      console.log("- UMLCollaboration created with ID:", this._collaboration._id);
+      console.log("- UMLInteraction and UMLSequenceDiagram created with all lifelines and messages");
+      console.log("- You can find the sequence diagram in the Model Explorer under the collaboration node.")
+      
+      console.log("[JSON Reverse Engineer] Sequence diagram structure imported and view generated.");
+    } else {
+      // For class diagram, use existing import method
+      // Load To Project
+      var writer = new app.repository.Writer();
+      writer.writeObj("data", this._root);
+      var json = writer.current.data;
+      app.project.importFromJson(app.project.getProject(), json);
 
-    // Generate Diagrams
-    this.generateDiagrams(options);
+      // Generate Diagrams
+      this.generateDiagrams(options);
+      console.log("[JSON Reverse Engineer] Class diagram imported and diagrams generated.");
+    }
+    
     console.log("[JSON Reverse Engineer] done.");
   }
 
@@ -581,6 +616,145 @@ class JsonCodeAnalyzer {
         return type.UMLModelElement.VK_PRIVATE;
       default:
         return type.UMLModelElement.VK_PACKAGE;
+    }
+  }
+  
+  /**
+   * Translate JSON Sequence Diagram to UML sequence diagram
+   * @param {Object} options
+   * @param {Object} sequenceDiagramJson
+   */
+  translateJsonSequenceDiagram(options, sequenceDiagramJson) {
+    // Create collaboration
+    const collaboration = new type.UMLCollaboration();
+    collaboration.name = sequenceDiagramJson.name || "Collaboration";
+    
+    // Create interaction
+    const interaction = new type.UMLInteraction();
+    interaction.name = "Interaction";
+    interaction._parent = collaboration;
+    collaboration.ownedElements.push(interaction);
+    
+    // Create sequence diagram
+    const sequenceDiagram = new type.UMLSequenceDiagram();
+    sequenceDiagram.name = "SequenceDiagram1";
+    sequenceDiagram._parent = interaction; // Add directly to root model
+    interaction.ownedElements.push(sequenceDiagram);
+    
+    // Set interaction as the model for the sequence diagram
+    sequenceDiagram.model = interaction;
+    
+    // Store references
+    this._collaboration = collaboration;
+    this._interaction = interaction;
+    this._sequenceDiagram = sequenceDiagram;
+    
+    // Map to store participant ID to UMLClassifierRole
+    this._participantMap = {};
+    
+    // Create participants (UMLClassifierRole)
+    if (sequenceDiagramJson.participants) {
+      sequenceDiagramJson.participants.forEach((participant) => {
+        this._createParticipant(participant);
+      });
+    }
+    
+    // Create messages
+    if (sequenceDiagramJson.sequences) {
+      sequenceDiagramJson.sequences.forEach((sequence) => {
+        if (sequence.messages) {
+          sequence.messages.forEach((messageJson) => {
+            this._createMessage(messageJson);
+          });
+        }
+      });
+    }
+    
+    console.log("[JSON Reverse Engineer] Sequence diagram structure created:", collaboration.name);
+  }
+  
+  /**
+   * Create participant (UMLLifeline) from JSON
+   * @param {Object} participantJson
+   */
+  _createParticipant(participantJson) {
+    // Create participant as UMLLifeline
+    const lifeline = new type.UMLLifeline();
+    lifeline.name = participantJson.display_name;
+    lifeline.selector = participantJson.name;
+    
+    // Add to interaction (not directly to sequence diagram)
+    lifeline._parent = this._interaction;
+    this._interaction.ownedElements.push(lifeline);
+    
+    // Also add to interaction's participants array
+    this._interaction.participants.push(lifeline);
+    
+    // Store reference in participant map using activity_id
+    if (participantJson.activities && participantJson.activities.length > 0) {
+      const activityId = participantJson.activities[0].id;
+      this._participantMap[activityId] = lifeline;
+      
+      // Also map other activities if present
+      if (participantJson.activities.length > 1) {
+        participantJson.activities.slice(1).forEach((activity) => {
+          this._participantMap[activity.id] = lifeline;
+        });
+      }
+      
+      console.log("Created participant:", lifeline.name, "with activity_id:", activityId);
+    } else {
+      // Fall back to participant ID if no activities
+      this._participantMap[participantJson.id] = lifeline;
+      console.log("Created participant:", lifeline.name, "with participant_id:", participantJson.id);
+    }
+  }
+  
+  /**
+   * Create a single message from JSON
+   * @param {Object} messageJson
+   */
+  _createMessage(messageJson) {
+    // Get source and target participants using activity_id
+    let sourceParticipant = null;
+    let targetParticipant = null;
+    
+    // Safely check for from and to properties
+    if (messageJson.from && messageJson.from.activity_id) {
+      sourceParticipant = this._participantMap[messageJson.from.activity_id];
+    } else {
+      console.warn("Message source or source.activity_id is undefined:", messageJson);
+      return;
+    }
+    
+    if (messageJson.to && messageJson.to.activity_id) {
+      targetParticipant = this._participantMap[messageJson.to.activity_id];
+    } else {
+      console.warn("Message target or target.activity_id is undefined:", messageJson);
+      return;
+    }
+    
+    if (sourceParticipant && targetParticipant) {
+      // Create message
+      const message = new type.UMLMessage();
+      message.name = messageJson.name;
+      message.source = sourceParticipant;
+      message.target = targetParticipant;
+      message.messageKind = type.UMLMessage.MK_SYNCH_CALL; // Default to synchronous call
+      
+      // Add to interaction
+      message._parent = this._interaction;
+      this._interaction.ownedElements.push(message);
+      
+      // Also add to interaction's messages array
+      this._interaction.messages.push(message);
+      
+      console.log("Created message:", messageJson.name, "from", sourceParticipant.name, "to", targetParticipant.name);
+    } else {
+      console.warn("Skipping message creation: source or target participant not found");
+      console.warn("Available participants in map:", Object.keys(this._participantMap));
+      console.warn("Message from activity_id:", messageJson.from.activity_id);
+      console.warn("Message to activity_id:", messageJson.to.activity_id);
     }
   }
   
