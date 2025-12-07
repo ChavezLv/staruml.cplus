@@ -81,10 +81,7 @@ class CppCodeAnalyzer {
     /** @member {Object} */
     this._currentCompilationUnit = null;
 
-    /**
-     * @member {{classifier:type.UMLClassifier, node: Object, kind:string}}
-     */
-    this._extendPendings = [];
+
 
     /**
      * @member {{classifier:type.UMLClassifier, node: Object}}
@@ -130,7 +127,7 @@ class CppCodeAnalyzer {
     this.performFirstPhase(options);
 
     // Perform 2nd Phase
-    this.performSecondPhase(options);
+    //this.performSecondPhase(options);
 
     // Load To Project
     var writer = new app.repository.Writer();
@@ -162,10 +159,49 @@ class CppCodeAnalyzer {
     if (options.packageOverview) {
       baseModel.traverse((elem) => {
         if (elem instanceof type.UMLPackage) {
-          app.commands.execute("diagram-generator:overview", elem, true);
-          app.commands.execute("diagram-generator:overview", elem, true);
+          var isRootWithSingleNamespace = elem === baseModel && elem.ownedElements.length === 1 &&
+            elem.ownedElements[0] instanceof type.UMLPackage;
+          if (isRootWithSingleNamespace) {
+            return;
+          }
+          var hasClassesOrInterfaces = false;
+          for (var i = 0; i < elem.ownedElements.length; i++) {
+            var child = elem.ownedElements[i];
+            if (child instanceof type.UMLClass || child instanceof type.UMLInterface ||
+              child instanceof type.UMLEnumeration) {
+              hasClassesOrInterfaces = true;
+              break;
+            }
+          }
+          if (!hasClassesOrInterfaces) {
+            return;
+          }
+          if (options.packageOverviewSimple) {
+            app.commands.execute("diagram-generator:overview", elem, true);
+            this._renameDiagram(elem, elem.name + ' Overview (Simple)');
+          }
+          if (options.packageOverviewDetailed) {
+            app.commands.execute("diagram-generator:overview-expanded", elem, true);
+            this._renameDiagram(elem, elem.name + ' Overview (Detailed)');
+          }
         }
       });
+    }
+  }
+  /**
+   * Rename the last generated diagram in the package
+   * @param {type.UMLPackage} pkg
+   * @param {string} newName
+   */
+  _renameDiagram(pkg, newName) {
+    // Find the last generated diagram (Overview)
+    for (var i = pkg.ownedElements.length - 1; i >= 0; i--) {
+      var elem = pkg.ownedElements[i];
+      if (elem instanceof type.UMLClassDiagram && elem.name === 'Overview') {
+        // Rename it
+        elem.name = newName;
+        break;
+      }
     }
   }
 
@@ -268,53 +304,6 @@ class CppCodeAnalyzer {
    */
   performSecondPhase(options) {
     var i, len, j, len2, _typeName, _type, _itemTypeName, _itemType, _pathName;
-
-    // Create Generalizations
-    //     if super type not found, create a Class correspond to the super type.
-    for (i = 0, len = this._extendPendings.length; i < len; i++) {
-      var _extend = this._extendPendings[i];
-      
-      // Check if we have JSON-based inheritance (with ID)
-      if (_extend.node.id) {
-        // Get base class from ID map
-        _type = this._classIdMap[_extend.node.id];
-        
-        // If type not found, try to find by name (if available)
-        if (!_type && _extend.node.name) {
-          _typeName = _extend.node.name;
-          _type = this._findType(
-            _extend.classifier,
-            _typeName,
-            _extend.compilationUnitNode,
-          );
-        }
-      } else {
-        // Traditional C++ parsing
-        _typeName = _extend.node;
-        _type = this._findType(
-          _extend.classifier,
-          _typeName,
-          _extend.compilationUnitNode,
-        );
-      }
-
-      if (!_type) {
-        // Fallback: create a new class if type not found
-        if (_extend.node.name) {
-          _pathName = [_extend.node.name];
-        } else {
-          // If no name available, use a placeholder
-          _pathName = ["UnknownBaseClass"];
-        }
-        _type = this._ensureClass(this._root, _pathName);
-      }
-
-      var generalization = new type.UMLGeneralization();
-      generalization._parent = _extend.classifier;
-      generalization.source = _extend.classifier;
-      generalization.target = _type;
-      _extend.classifier.ownedElements.push(generalization);
-    }
 
     // Create Associations
     for (i = 0, len = this._associationPendings.length; i < len; i++) {
@@ -580,16 +569,43 @@ class CppCodeAnalyzer {
 
     namespace.ownedElements.push(_class);
 
-    // Register Extends for 2nd Phase Translation
+    // Process inheritance directly for traditional C++ parsing
     if (classNode["base"]) {
       for (i = 0, len = classNode["base"].length; i < len; i++) {
-        var _extendPending = {
-          classifier: _class,
-          node: classNode["base"][i],
-          kind: "class",
-          compilationUnitNode: this._currentCompilationUnit,
-        };
-        this._extendPendings.push(_extendPending);
+        var baseNode = classNode["base"][i];
+        var _typeName = baseNode;
+        var _type;
+        
+        // Traditional C++ parsing: find the type
+        _type = this._findType(
+          _class,
+          _typeName,
+          this._currentCompilationUnit,
+        );
+
+        if (!_type) {
+          // Fallback: create a new class if type not found
+          var _pathName = [_typeName];
+          _type = this._ensureClass(this._root, _pathName);
+        }
+
+        // Check if generalization already exists before creating
+        var generalizationExists = false;
+        for (var elem of _class.ownedElements) {
+          if (elem instanceof type.UMLGeneralization && elem.target === _type) {
+            generalizationExists = true;
+            break;
+          }
+        }
+        
+        // Create generalization only if it doesn't already exist
+        if (!generalizationExists) {
+          var generalization = new type.UMLGeneralization();
+          generalization._parent = _class;
+          generalization.source = _class;
+          generalization.target = _type;
+          _class.ownedElements.push(generalization);
+        }
       }
     }
 
@@ -955,6 +971,118 @@ class CppCodeAnalyzer {
         }
       }
     }
+    
+    // Process relationships after all elements are created
+    if (classDiagram.relationships) {
+      for (const relationship of classDiagram.relationships) {
+        this.translateJsonRelationship(options, namespace, relationship);
+      }
+    }
+  }
+  
+  /**
+   * Translate JSON Relationship to UML relationship
+   * @param {Object} options
+   * @param {type.Model} namespace
+   * @param {Object} relationshipNode
+   */
+  translateJsonRelationship(options, namespace, relationshipNode) {
+    // Get source and target classes from ID map
+    const sourceClass = this._classIdMap[relationshipNode.source];
+    const targetClass = this._classIdMap[relationshipNode.destination];
+    
+    // Skip if either class is not found
+    if (!sourceClass || !targetClass) {
+      console.warn(`Skipping relationship: source or target class not found (${relationshipNode.source} -> ${relationshipNode.destination})`);
+      return;
+    }
+    
+    let relationship;
+    
+    // 打印relationshipNode信息
+    console.log("\n===打印relationshipNode ===");
+    console.log(JSON.stringify(relationshipNode, null, 2));
+    
+    // 开始switch语句处理不同类型的关系
+    switch (relationshipNode.type) {
+      case "dependency":
+        relationship = new type.UMLDependency();
+
+        // For dependency, add label as a tag if needed
+        console.log("debug", relationshipNode.label);
+        if (relationshipNode.label) {
+          this._addTag(relationship, type.Tag.TK_STRING, "label", relationshipNode.label);
+        }
+        break;
+        
+      case "association":
+      case "aggregation":
+      case "composition":
+        relationship = new type.UMLAssociation();
+        
+        // Set association end names
+        if (relationshipNode.label) {
+          relationship.end2.name = relationshipNode.label;
+        }
+        
+        // Set multiplicity (default is 1 for both ends)
+        relationship.end1.multiplicity = "1";
+        relationship.end2.multiplicity = "1";
+        console.log("debug", relationship.end1.multiplicity, relationship.end2.multiplicity);
+        
+        // Set navigability
+        relationship.end2.navigable = true;
+        
+        // Set aggregation/composition kind
+        if (relationshipNode.type === "aggregation") {
+          relationship.end2.aggregation = type.UMLAssociationEnd.AGREGATION_KIND_SHARED;
+        } else if (relationshipNode.type === "composition") {
+          relationship.end2.aggregation = type.UMLAssociationEnd.AGREGATION_KIND_COMPOSITE;
+        }
+        // 使用console.dir()直接打印（适合嵌套结构）
+        console.log("\n===使用console.dir()打印association relationship===");
+        console.dir(relationship, { depth: null, colors: true });
+        break;
+        
+      case "extension":
+        // Extension is typically used for inheritance
+        // Check if generalization already exists before creating
+        let generalizationExists = false;
+        for (const elem of sourceClass.ownedElements) {
+          if (elem instanceof type.UMLGeneralization && elem.target === targetClass) {
+            generalizationExists = true;
+            break;
+          }
+        }
+        
+        // Create generalization only if it doesn't already exist
+        if (!generalizationExists) {
+          // Create generalization directly
+          const generalization = new type.UMLGeneralization();
+          generalization.source = sourceClass;
+          generalization.target = targetClass;
+          generalization.visibility = this._getJsonVisibility(relationshipNode.access);
+          
+          // Add generalization to source class
+          generalization._parent = sourceClass;
+          sourceClass.ownedElements.push(generalization);
+        }
+        return;
+        
+      default:
+        console.warn(`Unknown relationship type: ${relationshipNode.type}`);
+        return;
+    }
+        // Set source and target
+    relationship.source = sourceClass;
+    relationship.target = targetClass;
+    
+    // Set visibility
+    relationship.visibility = this._getJsonVisibility(relationshipNode.access);
+    
+    // Add relationship to source class instead of namespace
+    relationship._parent = sourceClass;
+    sourceClass.ownedElements.push(relationship);
   }
 
   /**
@@ -987,24 +1115,58 @@ class CppCodeAnalyzer {
       this._classIdMap[classNode.id] = _class;
     }
     
-    // Process inheritance
+    // Process inheritance - directly create generalizations here instead of using _extendPendings
     if (classNode.bases) {
       for (const base of classNode.bases) {
-        this._extendPendings.push({
-          classifier: _class,
-          node: base,
-          kind: "class"
-        });
+        let _type;
+        
+        // Check if we have JSON-based inheritance (with ID)
+        if (base.id) {
+          // Get base class from ID map
+          _type = this._classIdMap[base.id];
+        }
+        
+        // If type not found by ID, try to find by name (if available)
+        if (!_type && base.name) {
+          _type = this._findType(
+            _class,
+            base.name,
+            _class.compilationUnitNode
+          );
+        }
+        
+        if (!_type) {
+          // Fallback: create a new class if type not found
+          _type = this._ensureClass(this._root, [base.name || "UnknownBaseClass"]);
+        }
+        
+        // Check if generalization already exists before creating
+        let generalizationExists = false;
+        for (const elem of _class.ownedElements) {
+          if (elem instanceof type.UMLGeneralization && elem.target === _type) {
+            generalizationExists = true;
+            break;
+          }
+        }
+        
+        // Create generalization only if it doesn't already exist
+        if (!generalizationExists) {
+          const generalization = new type.UMLGeneralization();
+          generalization._parent = _class;
+          generalization.source = _class;
+          generalization.target = _type;
+          _class.ownedElements.push(generalization);
+        }
       }
     }
     
     // Process attributes (JSON uses 'members' for attributes)
     if (classNode.members) {
-      console.log(`Processing ${classNode.members.length} members for class ${classNode.name}`);
+      //console.log(`Processing ${classNode.members.length} members for class ${classNode.name}`);
       for (const member of classNode.members) {
         // Check if it's an attribute (not a method - methods have parameters)
         if (!member.parameters) {
-          console.log(`Processing attribute: ${member.name} (type: ${member.type}, access: ${member.access})`);
+          //console.log(`Processing attribute: ${member.name} (type: ${member.type}, access: ${member.access})`);
           this.translateJsonAttribute(options, _class, member);
         }
       }
