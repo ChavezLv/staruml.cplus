@@ -70,7 +70,7 @@ class CppCodeAnalyzer {
   /**
    * @constructor
    */
-  constructor() {
+  constructor(options = {}) {
     /** @member {type.UMLModel} */
     this._root = new type.UMLModel();
     this._root.name = "CppReverse";
@@ -81,7 +81,11 @@ class CppCodeAnalyzer {
     /** @member {Object} */
     this._currentCompilationUnit = null;
 
-
+    /** @member {boolean} */
+    this._pointerAsAggregation = options.pointerAsAggregation || false;
+    
+    /** @member {boolean} */
+    this._uniquePtrAsComposition = options.uniquePtrAsComposition || false;
 
     /**
      * @member {{classifier:type.UMLClassifier, node: Object}}
@@ -137,7 +141,7 @@ class CppCodeAnalyzer {
 
     // Generate Diagrams
     this.generateDiagrams(options);
-    console.log("[C++] done.");
+    console.log("[C++ Reverse Engineer] done.");
   }
 
   /**
@@ -293,174 +297,7 @@ class CppCodeAnalyzer {
     return null;
   }
 
-  /**
-   * Perform Second Phase
-   *   - Create Generalizations
-   *   - Create InterfaceRealizations
-   *   - Create Fields or Associations
-   *   - Resolve Type References
-   *
-   * @param {Object} options
-   */
-  performSecondPhase(options) {
-    var i, len, j, len2, _typeName, _type, _itemTypeName, _itemType, _pathName;
-
-    // Create Associations
-    for (i = 0, len = this._associationPendings.length; i < len; i++) {
-      var _asso = this._associationPendings[i];
-      _typeName = _asso.node;
-      _type = this._findType(
-        _asso.classifier,
-        _typeName,
-        _asso.node.compilationUnitNode,
-      );
-      _itemTypeName = this._isGenericCollection(
-        _asso.node.type,
-        _asso.node.compilationUnitNode,
-      );
-      if (_itemTypeName) {
-        _itemType = this._findType(
-          _asso.classifier,
-          _itemTypeName,
-          _asso.node.compilationUnitNode,
-        );
-      } else {
-        _itemType = null;
-      }
-
-      // if type found, add as Association
-      if (_type || _itemType) {
-        for (j = 0, len2 = _asso.node.name.length; j < len2; j++) {
-          var variableNode = _asso.node.name[j];
-
-          // Create Association
-          var association = new type.UMLAssociation();
-          association._parent = _asso.classifier;
-          _asso.classifier.ownedElements.push(association);
-
-          // Set End1
-          association.end1.reference = _asso.classifier;
-          association.end1.name = "";
-          association.end1.visibility = type.UMLModelElement.VK_PACKAGE;
-          association.end1.navigable = false;
-
-          // Set End2
-          if (_itemType) {
-            association.end2.reference = _itemType;
-            association.end2.multiplicity = "*";
-            this._addTag(
-              association.end2,
-              type.Tag.TK_STRING,
-              "collection",
-              _asso.node.type.qualifiedName.name,
-            );
-          } else {
-            association.end2.reference = _type;
-          }
-          association.end2.name = variableNode.name;
-          association.end2.visibility = this._getVisibility(
-            _asso.node.modifiers,
-          );
-          association.end2.navigable = true;
-
-          // Final Modifier
-          if (_asso.node.modifiers && _asso.node.modifiers.includes("final")) {
-            association.end2.isReadOnly = true;
-          }
-
-          // Static Modifier
-          if (_asso.node.modifiers && _asso.node.modifiers.includes("static")) {
-            this._addTag(association.end2, type.Tag.TK_BOOLEAN, "static", true);
-          }
-
-          // Volatile Modifier
-          if (
-            _asso.node.modifiers &&
-            _asso.node.modifiers.includes("volatile")
-          ) {
-            this._addTag(
-              association.end2,
-              type.Tag.TK_BOOLEAN,
-              "volatile",
-              true,
-            );
-          }
-
-          // Transient Modifier
-          if (
-            _asso.node.modifiers &&
-            _asso.node.modifiers.includes("transient")
-          ) {
-            this._addTag(
-              association.end2,
-              type.Tag.TK_BOOLEAN,
-              "transient",
-              true,
-            );
-          }
-        }
-        // if type not found, add as Attribute
-      } else {
-        this.translateFieldAsAttribute(options, _asso.classifier, _asso.node);
-      }
-    }
-
-    // Resolve Type References
-    for (i = 0, len = this._typedFeaturePendings.length; i < len; i++) {
-      var _typedFeature = this._typedFeaturePendings[i];
-      _typeName = _typedFeature.node.type;
-
-      // Find type and assign
-      _type = this._findType(
-        _typedFeature.namespace,
-        _typedFeature.node,
-        _typedFeature.node.compilationUnitNode,
-      );
-
-      // if type is exists
-      if (_type) {
-        _typedFeature.feature.type = _type;
-        // if type is not exists
-      } else {
-        // if type is generic collection type (e.g. java.util.List<String>)
-        _itemTypeName = this._isGenericCollection(
-          _typedFeature.node.type,
-          _typedFeature.node.compilationUnitNode,
-        );
-        if (_itemTypeName) {
-          _typeName = _itemTypeName;
-          _typedFeature.feature.multiplicity = "*";
-          this._addTag(
-            _typedFeature.feature,
-            type.Tag.TK_STRING,
-            "collection",
-            _typedFeature.node.type,
-          );
-        }
-
-        // if type is primitive type
-        if (cppPrimitiveTypes.includes(_typeName)) {
-          _typedFeature.feature.type = _typeName;
-          // otherwise
-        } else {
-          _pathName = [_typeName];
-          var _newClass = this._ensureClass(this._root, _pathName);
-          _typedFeature.feature.type = _newClass;
-        }
-      }
-
-      // Translate type's arrayDimension to multiplicity
-      if (_typedFeature.node.type && _typedFeature.node.type.length > 0) {
-        var _dim = [];
-        for (j = 0, len2 = _typedFeature.node.type.length; j < len2; j++) {
-          if (_typedFeature.node.type[j] === "[") {
-            _dim.push("*");
-          }
-        }
-        _typedFeature.feature.multiplicity = _dim.join(",");
-      }
-    }
-  }
+  
 
   /**
    * Translate C++ CompilationUnit Node.
@@ -990,28 +827,26 @@ class CppCodeAnalyzer {
     // Get source and target classes from ID map
     const sourceClass = this._classIdMap[relationshipNode.source];
     const targetClass = this._classIdMap[relationshipNode.destination];
-    
+
     // Skip if either class is not found
     if (!sourceClass || !targetClass) {
       console.warn(`Skipping relationship: source or target class not found (${relationshipNode.source} -> ${relationshipNode.destination})`);
       return;
     }
-    
+    if(sourceClass.name == targetClass.name){
+      return;
+    }
     let relationship;
     
-    // 打印relationshipNode信息
-    console.log("\n===打印relationshipNode ===");
-    console.log(JSON.stringify(relationshipNode, null, 2));
-    
-    // 开始switch语句处理不同类型的关系
     switch (relationshipNode.type) {
       case "dependency":
         relationship = new type.UMLDependency();
+        //console.log(`Created UMLDependency object:`, relationship);
 
         // For dependency, add label as a tag if needed
-        console.log("debug", relationshipNode.label);
         if (relationshipNode.label) {
           this._addTag(relationship, type.Tag.TK_STRING, "label", relationshipNode.label);
+          //console.log(`Added label tag to dependency: ${relationshipNode.label}`);
         }
         break;
         
@@ -1019,29 +854,35 @@ class CppCodeAnalyzer {
       case "aggregation":
       case "composition":
         relationship = new type.UMLAssociation();
+        //console.log(`Created UMLAssociation object:`, relationship);
         
         // Set association end names
         if (relationshipNode.label) {
-          relationship.end2.name = relationshipNode.label;
+          relationship.name = relationshipNode.label;
+          //console.log(`Set end2.name to: ${relationshipNode.label}`);
         }
         
-        // Set multiplicity (default is 1 for both ends)
-        relationship.end1.multiplicity = "1";
-        relationship.end2.multiplicity = "1";
-        console.log("debug", relationship.end1.multiplicity, relationship.end2.multiplicity);
+        // Set multiplicities (default is 1 for both ends)
+        relationship.end1.multiplicity = "";
+        relationship.end2.multiplicity = "";
+        //console.log(`Set multiplicities: end1=${relationship.end1.multiplicity}, end2=${relationship.end2.multiplicity}`);
         
-        // Set navigability
-        relationship.end2.navigable = true;
+        // Set navigability(三角箭头>)
+        relationship.end2.navigable = false;
+        relationship.end1.navigable = false;
+        //console.log(`Set end2.navigable to: ${relationship.end2.navigable}`);
         
-        // Set aggregation/composition kind
+        // Set aggregation/composition kind according to UML standard
+        relationship.end2.aggregation = undefined; // Default to regular association
+        
         if (relationshipNode.type === "aggregation") {
-          relationship.end2.aggregation = type.UMLAssociationEnd.AGREGATION_KIND_SHARED;
-        } else if (relationshipNode.type === "composition") {
-          relationship.end2.aggregation = type.UMLAssociationEnd.AGREGATION_KIND_COMPOSITE;
+          relationship.end2.aggregation = "shared"; // Hollow diamond (aggregation)
+          //console.log(`Set end2.aggregation to: shared (hollow diamond)`);
+        } else if (relationshipNode.type === "association") {
+          relationship.end2.aggregation = "composite"; // Solid diamond (composition)
+          //console.log(`Set end2.aggregation to: composite (solid diamond)`);
         }
-        // 使用console.dir()直接打印（适合嵌套结构）
-        console.log("\n===使用console.dir()打印association relationship===");
-        console.dir(relationship, { depth: null, colors: true });
+        //console.log(`Association object after setup:`, relationship);
         break;
         
       case "extension":
@@ -1062,10 +903,14 @@ class CppCodeAnalyzer {
           generalization.source = sourceClass;
           generalization.target = targetClass;
           generalization.visibility = this._getJsonVisibility(relationshipNode.access);
+          //console.log(`Created UMLGeneralization object:`, generalization);
           
           // Add generalization to source class
           generalization._parent = sourceClass;
           sourceClass.ownedElements.push(generalization);
+          //console.log(`Added generalization to source class: ${sourceClass.name}`);
+        } else {
+          //console.log(`Generalization already exists, skipping`);
         }
         return;
         
@@ -1073,16 +918,29 @@ class CppCodeAnalyzer {
         console.warn(`Unknown relationship type: ${relationshipNode.type}`);
         return;
     }
-        // Set source and target
-    relationship.source = sourceClass;
-    relationship.target = targetClass;
+    
+    // Set source and target for UMLDependency
+    if (relationship instanceof type.UMLDependency) {
+      relationship.source = sourceClass;
+      relationship.target = targetClass;
+      //console.log(`Set dependency source to: ${sourceClass.name}, target to: ${targetClass.name}`);
+    } 
+    // Set association ends references for UMLAssociation
+    else if (relationship instanceof type.UMLAssociation) {
+      relationship.end1.reference = sourceClass;
+      relationship.end2.reference = targetClass;
+      //console.log(`Set association ends references: end1 -> ${sourceClass.name}, end2 -> ${targetClass.name}`);
+    }
     
     // Set visibility
     relationship.visibility = this._getJsonVisibility(relationshipNode.access);
+    //console.log(`Set relationship visibility to: ${relationship.visibility}`);
     
     // Add relationship to source class instead of namespace
     relationship._parent = sourceClass;
     sourceClass.ownedElements.push(relationship);
+    //console.log(`Added relationship to source class. Total relationships in sourceClass: ${sourceClass.ownedElements.filter(e => e instanceof type.UMLAssociation || e instanceof type.UMLDependency).length}`);
+
   }
 
   /**
@@ -1136,8 +994,8 @@ class CppCodeAnalyzer {
         }
         
         if (!_type) {
-          // Fallback: create a new class if type not found
-          _type = this._ensureClass(this._root, [base.name || "UnknownBaseClass"]);
+          // Skip if base class not found and no valid name provided
+          continue;
         }
         
         // Check if generalization already exists before creating
@@ -1325,7 +1183,7 @@ class CppCodeAnalyzer {
  * @param {Object} options
  */
 function analyze(basePath, options) {
-  var cppAnalyzer = new CppCodeAnalyzer();
+  var cppAnalyzer = new CppCodeAnalyzer(options);
 
   function visit(base) {
     var stat = fs.lstatSync(base);
@@ -1353,3 +1211,6 @@ function analyze(basePath, options) {
 }
 
 exports.analyze = analyze;
+
+
+
