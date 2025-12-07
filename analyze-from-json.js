@@ -84,14 +84,8 @@ class JsonCodeAnalyzer {
       writer.writeObj("data", this._collaboration);
       var json = writer.current.data;
       app.project.importFromJson(app.project.getProject(), json);
-      
       // Sequence diagram structure has been imported successfully
-      console.log("[JSON Reverse Engineer] Sequence diagram structure imported:");
-      console.log("- UMLCollaboration created with ID:", this._collaboration._id);
-      console.log("- UMLInteraction and UMLSequenceDiagram created with all lifelines and messages");
-      console.log("- You can find the sequence diagram in the Model Explorer under the collaboration node.")
-      
-      console.log("[JSON Reverse Engineer] Sequence diagram structure imported and view generated.");
+      this.generateDiagrams(options);
     } else {
       // For class diagram, use existing import method
       // Load To Project
@@ -102,10 +96,7 @@ class JsonCodeAnalyzer {
 
       // Generate Diagrams
       this.generateDiagrams(options);
-      console.log("[JSON Reverse Engineer] Class diagram imported and diagrams generated.");
     }
-    
-    console.log("[JSON Reverse Engineer] done.");
   }
 
   /**
@@ -113,6 +104,14 @@ class JsonCodeAnalyzer {
    * @param {Object} options
    */
   generateDiagrams(options) {
+    if(this._collaboration){
+      var baseModel = app.repository.get(this._interaction._id);
+            baseModel.traverse((elem) => {
+            console.log("[JSON Reverse Engineer] Sequence diagram:elem:\n");
+            console.dir(elem, { depth: null, colors: true });
+            app.commands.execute("diagram-generator:sequence", elem, true);
+      });
+    }else{
     var baseModel = app.repository.get(this._root._id);
     if (options.packageStructure) {
       app.commands.execute(
@@ -156,6 +155,7 @@ class JsonCodeAnalyzer {
       });
     }
   }
+}
   
   /**
    * Rename the last generated diagram in the package
@@ -634,20 +634,10 @@ class JsonCodeAnalyzer {
     interaction.name = "Interaction";
     interaction._parent = collaboration;
     collaboration.ownedElements.push(interaction);
-    
-    // Create sequence diagram
-    const sequenceDiagram = new type.UMLSequenceDiagram();
-    sequenceDiagram.name = "SequenceDiagram1";
-    sequenceDiagram._parent = interaction; // Add directly to root model
-    interaction.ownedElements.push(sequenceDiagram);
-    
-    // Set interaction as the model for the sequence diagram
-    sequenceDiagram.model = interaction;
-    
+ 
     // Store references
     this._collaboration = collaboration;
     this._interaction = interaction;
-    this._sequenceDiagram = sequenceDiagram;
     
     // Map to store participant ID to UMLClassifierRole
     this._participantMap = {};

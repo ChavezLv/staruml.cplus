@@ -1,0 +1,20 @@
+{
+  "menu": [
+    {
+      "id": "tools",
+      "submenu": [
+        {
+          "label": "图表生成器",
+          "id": "tools.diagram-generator",
+          "submenu": [
+            { "label": "概述", "id": "tools.diagram-generator.overview", "command": "diagram-generator:overview" },
+            { "label": "扩展概述", "id": "tools.diagram-generator.overview-expanded", "command": "diagram-generator:overview-expanded" },
+            { "label": "类型层次", "id": "tools.diagram-generator.type-hierarchy", "command": "diagram-generator:type-hierarchy" },
+            { "label": "包结构", "id": "tools.diagram-generator.package-structure", "command": "diagram-generator:package-structure" },
+            { "label": "时序图", "id": "tools.diagram-generator.sequence", "command": "diagram-generator:sequence" }
+          ]
+        }
+      ]
+    }
+  ]
+}
