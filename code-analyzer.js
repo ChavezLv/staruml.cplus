@@ -63,9 +63,6 @@ var cppPrimitiveTypes = [
   "unsigned long long",
 ];
 
-// common typedefs and library types that shouldn't become classes
-cppPrimitiveTypes.push("size_t");
-
 /**
  * C++ Code Analyzer
  */
@@ -109,12 +106,10 @@ class CppCodeAnalyzer {
      */
     this._typedFeaturePendings = [];
 
-    /**
-     * @member {{source:type.UMLClassifier, targetTypeName:string, node:Object}}
-     */
-    this._dependencyPendings = [];
-
     this._usingList = [];
+    
+    // Map to store class ID to class object for inheritance processing
+    this._classIdMap = {};
   }
 
   /**
@@ -167,50 +162,10 @@ class CppCodeAnalyzer {
     if (options.packageOverview) {
       baseModel.traverse((elem) => {
         if (elem instanceof type.UMLPackage) {
-          var isRootWithSingleNamespace = elem === baseModel && elem.ownedElements.length === 1 &&
-            elem.ownedElements[0] instanceof type.UMLPackage;
-          if (isRootWithSingleNamespace) {
-            return;
-          }
-          var hasClassesOrInterfaces = false;
-          for (var i = 0; i < elem.ownedElements.length; i++) {
-            var child = elem.ownedElements[i];
-            if (child instanceof type.UMLClass || child instanceof type.UMLInterface ||
-              child instanceof type.UMLEnumeration) {
-              hasClassesOrInterfaces = true;
-              break;
-            }
-          }
-          if (!hasClassesOrInterfaces) {
-            return;
-          }
-          if (options.packageOverviewSimple) {
-            app.commands.execute("diagram-generator:overview", elem, true);
-            this._renameDiagram(elem, elem.name + ' Overview (Simple)');
-          }
-          if (options.packageOverviewDetailed) {
-            app.commands.execute("diagram-generator:overview-expanded", elem, true);
-            this._renameDiagram(elem, elem.name + ' Overview (Detailed)');
-          }
+          app.commands.execute("diagram-generator:overview", elem, true);
+          app.commands.execute("diagram-generator:overview", elem, true);
         }
       });
-    }
-  }
-  
-  /**
-   * Rename the last generated diagram in the package
-   * @param {type.UMLPackage} pkg
-   * @param {string} newName
-   */
-  _renameDiagram(pkg, newName) {
-    // Find the last generated diagram (Overview)
-    for (var i = pkg.ownedElements.length - 1; i >= 0; i--) {
-      var elem = pkg.ownedElements[i];
-      if (elem instanceof type.UMLClassDiagram && elem.name === 'Overview') {
-        // Rename it
-        elem.name = newName;
-        break;
-      }
     }
   }
 
@@ -226,20 +181,10 @@ class CppCodeAnalyzer {
     var typeName, pathName;
     var _type = null;
 
-    // Defensive: if no type information provided, return null
-    if (type_ === undefined || type_ === null) {
-      return null;
-    }
-
     typeName = type_;
 
-    // If caller passed an object, try to read its name; otherwise bail out
     if (typeof typeName !== "string") {
-      if (type_ && typeof type_.name === "string") {
-        typeName = type_.name;
-      } else {
-        return null;
-      }
+      typeName = type_.name;
     }
 
     pathName = [typeName];
@@ -313,80 +258,6 @@ class CppCodeAnalyzer {
   }
 
   /**
-   * Normalize a type name by removing cv-qualifiers, pointers/references
-   * and simple template arguments so the analyzer doesn't create
-   * spurious classes for things like `const Foo &` or `std::string`.
-   * @param {string} typeName
-   * @return {string}
-   */
-  _normalizeTypeName(typeName) {
-    if (!typeName) return typeName;
-    var name = typeName;
-    if (typeof name !== "string") {
-      if (name && typeof name.name === "string") {
-        name = name.name;
-      } else {
-        name = String(name);
-      }
-    }
-
-    // collapse whitespace and trim
-    name = name.replace(/\s+/g, " ").trim();
-
-    // 为了让签名更简洁，把 C++ 标准库命名空间 std:: 隐藏掉
-    // 例如：std::pair<int, std::string> -> pair<int, string>
-    name = name.replace(/\bstd::/g, "");
-
-    return name;
-  }
-
-  /**
-   * Extract base type name from a type string, removing template arguments
-   * and other qualifiers for dependency resolution.
-   * @param {string} typeName
-   * @return {string}
-   */
-  _extractBaseTypeName(typeName) {
-    if (!typeName) return typeName;
-    var name = this._normalizeTypeName(typeName);
-    
-    // Remove template arguments for dependency resolution
-    // This helps find the actual class type without template parameters
-    name = name.replace(/<[^<>]*>/g, "");
-    
-    // Remove cv-qualifiers and keywords
-    name = name.replace(/\b(const|volatile|struct|class)\b/g, "");
-    
-    // Remove pointer/reference symbols
-    name = name.replace(/[&*]/g, "");
-    
-    // Collapse whitespace and trim
-    name = name.replace(/\s+/g, " ").trim();
-    
-    return name;
-  }
-
-  /**
-   * Safely extract a string name from parser nodes.
-   * 有些语法节点的 name 可能是对象（例如 {name:'Singleton', typeParameters:[...]}），
-   * 这里统一收敛成字符串，避免把整个对象直接写进模型导致 Writer 报错。
-   * @param {string|Object} nodeOrName
-   * @return {string}
-   */
-  _toName(nodeOrName) {
-    if (typeof nodeOrName === "string") {
-      return nodeOrName;
-    }
-    if (!nodeOrName) {
-      return "";
-    }
-    if (typeof nodeOrName.name === "string") {
-      return nodeOrName.name;
-    }
-    return String(nodeOrName);
-  }
-
-  /**
    * Perform Second Phase
    *   - Create Generalizations
    *   - Create InterfaceRealizations
@@ -398,32 +269,44 @@ class CppCodeAnalyzer {
   performSecondPhase(options) {
     var i, len, j, len2, _typeName, _type, _itemTypeName, _itemType, _pathName;
 
-    // Create Generalizations and Dependencies for base classes
-    //     if super type not found, selectively create a Class correspond to the super type.
+    // Create Generalizations
+    //     if super type not found, create a Class correspond to the super type.
     for (i = 0, len = this._extendPendings.length; i < len; i++) {
       var _extend = this._extendPendings[i];
-      _typeName = _extend.node;
-      _type = this._findType(
-        _extend.classifier,
-        _typeName,
-        _extend.compilationUnitNode,
-      );
+      
+      // Check if we have JSON-based inheritance (with ID)
+      if (_extend.node.id) {
+        // Get base class from ID map
+        _type = this._classIdMap[_extend.node.id];
+        
+        // If type not found, try to find by name (if available)
+        if (!_type && _extend.node.name) {
+          _typeName = _extend.node.name;
+          _type = this._findType(
+            _extend.classifier,
+            _typeName,
+            _extend.compilationUnitNode,
+          );
+        }
+      } else {
+        // Traditional C++ parsing
+        _typeName = _extend.node;
+        _type = this._findType(
+          _extend.classifier,
+          _typeName,
+          _extend.compilationUnitNode,
+        );
+      }
 
       if (!_type) {
-        // 如果找不到基类，只在类型名是“简单标识符/命名空间名”时才自动建类，
-        // 避免生成诸如 "Singleton<CacheManager>"、"LRUCache&" 这类垃圾类名。
-        var _normName = this._normalizeTypeName(_typeName);
-        if (
-          _normName &&
-          typeof _normName === "string" &&
-          /^[A-Za-z_]\w*(::[A-Za-z_]\w*)*$/.test(_normName)
-        ) {
-          _pathName = [_normName];
-          _type = this._ensureClass(this._root, _pathName);
+        // Fallback: create a new class if type not found
+        if (_extend.node.name) {
+          _pathName = [_extend.node.name];
         } else {
-          // 不创建对应的 UMLClass，直接跳过这条继承关系
-          continue;
+          // If no name available, use a placeholder
+          _pathName = ["UnknownBaseClass"];
         }
+        _type = this._ensureClass(this._root, _pathName);
       }
 
       var generalization = new type.UMLGeneralization();
@@ -473,32 +356,23 @@ class CppCodeAnalyzer {
           association.end1.navigable = false;
 
           // Set End2
-          if (_type) {
-            association.end2.reference = _type;
-          } else if (_itemType) {
+          if (_itemType) {
             association.end2.reference = _itemType;
+            association.end2.multiplicity = "*";
+            this._addTag(
+              association.end2,
+              type.Tag.TK_STRING,
+              "collection",
+              _asso.node.type.qualifiedName.name,
+            );
+          } else {
+            association.end2.reference = _type;
           }
           association.end2.name = variableNode.name;
           association.end2.visibility = this._getVisibility(
             _asso.node.modifiers,
           );
           association.end2.navigable = true;
-
-          const typeStr = this._toName(_asso.node.type);
-          const uniquePtrAsComposition = options && options.uniquePtrAsComposition !== false;
-          const pointerAsAggregation = options && options.pointerAsAggregation !== false;
-          const referenceAsAssociation = options && options.referenceAsAssociation !== false;
-          let agg = 0;
-          if (typeStr.includes("unique_ptr")) {
-            agg = uniquePtrAsComposition ? 2 : (pointerAsAggregation ? 1 : 0);
-          } else if (typeStr.includes("*") || typeStr.includes("shared_ptr")) {
-            agg = pointerAsAggregation ? 1 : 0;
-          } else if (typeStr.includes("&")) {
-            agg = referenceAsAssociation ? 0 : 1;
-          } else {
-            agg = 2;
-          }
-          association.end2.aggregation = agg;
 
           // Final Modifier
           if (_asso.node.modifiers && _asso.node.modifiers.includes("final")) {
@@ -550,15 +424,15 @@ class CppCodeAnalyzer {
       // Find type and assign
       _type = this._findType(
         _typedFeature.namespace,
-        _typeName,
+        _typedFeature.node,
         _typedFeature.node.compilationUnitNode,
       );
 
       // if type is exists
       if (_type) {
         _typedFeature.feature.type = _type;
-      } else {
         // if type is not exists
+      } else {
         // if type is generic collection type (e.g. java.util.List<String>)
         _itemTypeName = this._isGenericCollection(
           _typedFeature.node.type,
@@ -567,47 +441,22 @@ class CppCodeAnalyzer {
         if (_itemTypeName) {
           _typeName = _itemTypeName;
           _typedFeature.feature.multiplicity = "*";
-
-          // collection 标签只需要一个可序列化的字符串，避免把整个 AST 对象塞进去
-          var _collRaw = _typedFeature.node.type;
-          var _collText =
-            typeof _collRaw === "string"
-              ? _collRaw
-              : this._normalizeTypeName(_collRaw) ||
-                (typeof _collRaw === "object"
-                  ? JSON.stringify(_collRaw)
-                  : String(_collRaw));
-
           this._addTag(
             _typedFeature.feature,
             type.Tag.TK_STRING,
             "collection",
-            _collText,
+            _typedFeature.node.type,
           );
         }
 
-        // normalize the type name (strip const/*/&/templates)
-        var _norm = this._normalizeTypeName(_typeName);
-
-        // If normalization produced nothing (e.g. parser couldn't determine type),
-        // 避免把 JS 对象直接变成 "[object Object]"，直接视为未知类型。
-        if (!_norm || typeof _norm !== "string") {
-          _typedFeature.feature.type = null;
-          continue;
-        }
-
-        // treat common library types and primitives as opaque (no class creation)
-        if (cppPrimitiveTypes.includes(_norm) || /^[a-z0-9_]+_t$/i.test(_norm)) {
-          _typedFeature.feature.type = _norm;
-        } else if (_norm.indexOf("std::") === 0) {
-          // For std:: types, strip std:: only for common string types
-          var m = _norm.match(/^std::(string|wstring|u16string|u32string)$/);
-          _typedFeature.feature.type = m ? m[1] : _norm;
+        // if type is primitive type
+        if (cppPrimitiveTypes.includes(_typeName)) {
+          _typedFeature.feature.type = _typeName;
+          // otherwise
         } else {
-          // 对于非原生/非 std:: 基础类型，如果在模型中没有定义对应类，
-          // 不再强行创建一个独立 UMLClass（例如 "LRUCache&"、"list<pair<string,string>>&"）。
-          // 直接把规范化后的类型名当作字符串类型使用即可。
-          _typedFeature.feature.type = _norm;
+          _pathName = [_typeName];
+          var _newClass = this._ensureClass(this._root, _pathName);
+          _typedFeature.feature.type = _newClass;
         }
       }
 
@@ -620,32 +469,6 @@ class CppCodeAnalyzer {
           }
         }
         _typedFeature.feature.multiplicity = _dim.join(",");
-      }
-    }
-
-    // Create Dependencies (avoid duplicates)
-    var createdDependencies = new Set();
-    for (i = 0, len = this._dependencyPendings.length; i < len; i++) {
-      var _dep = this._dependencyPendings[i];
-      _typeName = _dep.targetTypeName;
-      _type = this._findType(
-        _dep.source,
-        _typeName,
-        _dep.node.compilationUnitNode,
-      );
-
-      if (_type) {
-        // Create a unique key for this dependency
-        var depKey = _dep.source._id + "->" + _type._id;
-        if (!createdDependencies.has(depKey)) {
-          // Create Dependency
-          var dependency = new type.UMLDependency();
-          dependency._parent = _dep.source;
-          dependency.source = _dep.source;
-          dependency.target = _type;
-          _dep.source.ownedElements.push(dependency);
-          createdDependencies.add(depKey);
-        }
       }
     }
   }
@@ -709,7 +532,7 @@ class CppCodeAnalyzer {
     // Create Enumeration
     _enum = new type.UMLEnumeration();
     _enum._parent = namespace;
-    _enum.name = this._toName(enumNode.name);
+    _enum.name = enumNode.name;
     _enum.visibility = this._getVisibility(enumNode.modifiers);
 
     // CppDoc
@@ -735,24 +558,12 @@ class CppCodeAnalyzer {
   translateClass(options, namespace, classNode) {
     var i, len, _class;
 
-    // 跳过纯前置声明：例如 "class EventLoop;"、"class TcpConnection;"
-    // 这类产生式在 AST 中不会带有 body 属性，而真正的类定义（即便是空类）
-    // 也会通过 "body": $2 这样的语义动作生成 body 属性（值可能是 undefined）。
-    if (!Object.prototype.hasOwnProperty.call(classNode, "body")) {
-      return;
-    }
+    // Create Class
+    _class = new type.UMLClass();
+    _class._parent = namespace;
+    _class.name = classNode.name;
 
-    // Create or reuse Class，避免生成重复的空同名类
-    var className = this._toName(classNode.name);
-    _class = namespace.findByName(className);
-    if (!_class || !(_class instanceof type.UMLClass)) {
-      _class = new type.UMLClass();
-      _class._parent = namespace;
-      _class.name = className;
-      namespace.ownedElements.push(_class);
-    }
-
-    // Access Modifiers（后出现的声明可以覆盖前面的可见性）
+    // Access Modifiers
     _class.visibility = this._getVisibility(classNode.modifiers);
 
     // Abstract Class
@@ -766,6 +577,8 @@ class CppCodeAnalyzer {
     //        if (classNode.comment) {
     //            _class.documentation = classNode.comment;
     //        }
+
+    namespace.ownedElements.push(_class);
 
     // Register Extends for 2nd Phase Translation
     if (classNode["base"]) {
@@ -848,10 +661,10 @@ class CppCodeAnalyzer {
     var i, len;
     var _operation = new type.UMLOperation();
     _operation._parent = namespace;
-    _operation.name = this._toName(methodNode.name);
+    _operation.name = methodNode.name;
 
     if (!isConstructor) {
-      _operation.name = this._toName(methodNode.name);
+      _operation.name = methodNode.name;
     }
 
     namespace.operations.push(_operation);
@@ -876,16 +689,6 @@ class CppCodeAnalyzer {
         var parameterNode = methodNode.parameter[i];
         parameterNode.compilationUnitNode = methodNode.compilationUnitNode;
         this.translateParameter(options, _operation, parameterNode);
-        
-        // Add dependency for parameter type
-        var paramTypeName = this._extractBaseTypeName(parameterNode.type);
-        if (paramTypeName && typeof paramTypeName === "string" && paramTypeName !== "" && !cppPrimitiveTypes.includes(paramTypeName)) {
-          this._dependencyPendings.push({
-            source: namespace,
-            targetTypeName: paramTypeName,
-            node: parameterNode,
-          });
-        }
       }
     }
 
@@ -902,16 +705,6 @@ class CppCodeAnalyzer {
         node: methodNode,
       });
       _operation.parameters.push(_returnParam);
-      
-      // Add dependency for return type
-      var returnTypeName = this._extractBaseTypeName(methodNode.type);
-      if (returnTypeName && typeof returnTypeName === "string" && returnTypeName !== "" && !cppPrimitiveTypes.includes(returnTypeName)) {
-        this._dependencyPendings.push({
-          source: namespace,
-          targetTypeName: returnTypeName,
-          node: methodNode,
-        });
-      }
     }
 
     // Throws
@@ -950,9 +743,7 @@ class CppCodeAnalyzer {
   translateParameter(options, namespace, parameterNode) {
     var _parameter = new type.UMLParameter();
     _parameter._parent = namespace;
-    _parameter.name = this._toName(parameterNode.name);
-    // Set parameter direction to 'in' so it displays correctly in diagrams
-    _parameter.direction = type.UMLParameter.DK_IN;
+    _parameter.name = parameterNode.name;
     namespace.parameters.push(_parameter);
 
     // Add to _typedFeaturePendings
@@ -978,7 +769,7 @@ class CppCodeAnalyzer {
         // Create Attribute
         var _attribute = new type.UMLAttribute();
         _attribute._parent = namespace;
-        _attribute.name = this._toName(variableNode.name);
+        _attribute.name = variableNode.name;
 
         // Access Modifiers
         _attribute.visibility = this._getVisibility(fieldNode.modifiers);
@@ -1012,16 +803,6 @@ class CppCodeAnalyzer {
           node: fieldNode,
         };
         this._typedFeaturePendings.push(_typedFeature);
-        
-        // Add dependency for attribute type
-        var attrTypeName = this._extractBaseTypeName(fieldNode.type);
-        if (attrTypeName && typeof attrTypeName === "string" && attrTypeName !== "" && !cppPrimitiveTypes.includes(attrTypeName)) {
-          this._dependencyPendings.push({
-            source: namespace,
-            targetTypeName: attrTypeName,
-            node: fieldNode,
-          });
-        }
       }
     }
   }
@@ -1040,21 +821,7 @@ class CppCodeAnalyzer {
     tag.kind = kind;
     switch (kind) {
       case type.Tag.TK_STRING:
-        // Writer 要求 value 必须是 string/number/boolean，这里统一做一次安全转换
-        if (
-          typeof value !== "string" &&
-          typeof value !== "number" &&
-          typeof value !== "boolean"
-        ) {
-          try {
-            // 尽量以 JSON 形式保留信息
-            tag.value = JSON.stringify(value);
-          } catch (e) {
-            tag.value = String(value);
-          }
-        } else {
-          tag.value = value;
-        }
+        tag.value = value;
         break;
       case type.Tag.TK_BOOLEAN:
         tag.checked = value;
@@ -1066,20 +833,7 @@ class CppCodeAnalyzer {
         tag.reference = value;
         break;
       case type.Tag.TK_HIDDEN:
-        // 对 HIDDEN 同样做一次类型规整，避免把对象直接塞进去
-        if (
-          typeof value !== "string" &&
-          typeof value !== "number" &&
-          typeof value !== "boolean"
-        ) {
-          try {
-            tag.value = JSON.stringify(value);
-          } catch (e2) {
-            tag.value = String(value);
-          }
-        } else {
-          tag.value = value;
-        }
+        tag.value = value;
         break;
     }
     elem.tags.push(tag);
@@ -1163,32 +917,243 @@ class CppCodeAnalyzer {
   }
 
   /**
-   * Perform First Phase
-   *   - Create Packages, Classes, Interfaces, Enums, AnnotationTypes.
+   * Perform first phase analysis using JSON class diagram
    *
    * @param {Object} options
-   * @return {$.Promise}
    */
   performFirstPhase(options) {
-    this._files.forEach((file) => {
-      var data = fs.readFileSync(file, "utf8");
-      try {
-        var ast = parser.parse(data);
-        var results = [];
-        for (var property in ast) {
-          var value = ast[property];
-          if (value) {
-            results.push(property.toString() + ": " + value);
-          }
+    try {
+      // Read and parse the JSON class diagram file
+      const jsonPath = __dirname + "/grammar/formatted_class_diagram.json";
+      const jsonContent = fs.readFileSync(jsonPath, "utf8");
+      const classDiagram = JSON.parse(jsonContent);
+      
+      // Process the class diagram
+      this.translateJsonClassDiagram({}, this._root, classDiagram);
+    } catch (err) {
+      console.error("Error parsing JSON class diagram:", err);
+    }
+  }
+
+  /**
+   * Translate JSON Class Diagram to UML model
+   * @param {Object} options
+   * @param {type.Model} namespace
+   * @param {Object} classDiagram
+   */
+  translateJsonClassDiagram(options, namespace, classDiagram) {
+    if (classDiagram.elements) {
+      for (const element of classDiagram.elements) {
+        switch (element.type) {
+          case "class":
+          case "struct":
+            this.translateJsonClass(options, namespace, element);
+            break;
+          case "enum":
+            this.translateJsonEnum(options, namespace, element);
+            break;
         }
-        this._currentCompilationUnit = ast;
-        this._currentCompilationUnit.file = file;
-        this.translateCompilationUnit(options, this._root, ast);
-      } catch (ex) {
-        console.error("[C++] Failed to parse - " + file);
-        console.error(ex);
       }
-    });
+    }
+  }
+
+  /**
+   * Translate JSON Class Node
+   * @param {Object} options
+   * @param {type.Model} namespace
+   * @param {Object} classNode
+   */
+  translateJsonClass(options, namespace, classNode) {
+    // Create Class or Struct
+    const _class = new type.UMLClass();
+    _class._parent = namespace;
+    _class.name = classNode.name;
+    _class.visibility = this._getJsonVisibility(classNode.access);
+    
+    // Set struct flag if needed
+    if (classNode.is_struct) {
+      this._addTag(_class, type.Tag.TK_BOOLEAN, "struct", true);
+    }
+    
+    // Set abstract flag if needed
+    if (classNode.is_abstract) {
+      _class.isAbstract = true;
+    }
+    
+    namespace.ownedElements.push(_class);
+    
+    // Store class ID to object mapping
+    if (classNode.id) {
+      this._classIdMap[classNode.id] = _class;
+    }
+    
+    // Process inheritance
+    if (classNode.bases) {
+      for (const base of classNode.bases) {
+        this._extendPendings.push({
+          classifier: _class,
+          node: base,
+          kind: "class"
+        });
+      }
+    }
+    
+    // Process attributes (JSON uses 'members' for attributes)
+    if (classNode.members) {
+      console.log(`Processing ${classNode.members.length} members for class ${classNode.name}`);
+      for (const member of classNode.members) {
+        // Check if it's an attribute (not a method - methods have parameters)
+        if (!member.parameters) {
+          console.log(`Processing attribute: ${member.name} (type: ${member.type}, access: ${member.access})`);
+          this.translateJsonAttribute(options, _class, member);
+        }
+      }
+    }
+    
+    // Process methods
+    if (classNode.methods) {
+      for (const method of classNode.methods) {
+        this.translateJsonMethod(options, _class, method);
+      }
+    }
+  }
+
+  /**
+   * Translate JSON Attribute
+   * @param {Object} options
+   * @param {type.Model} parent
+   * @param {Object} attrNode
+   */
+  translateJsonAttribute(options, parent, attrNode) {
+    // Create Attribute
+    const _attr = new type.UMLAttribute();
+    _attr._parent = parent;
+    _attr.name = attrNode.name;
+    _attr.type = attrNode.type;
+    _attr.visibility = this._getJsonVisibility(attrNode.access);
+    
+    // Set static flag if needed
+    if (attrNode.is_static) {
+      _attr.isStatic = true;
+    }
+    
+    parent.attributes.push(_attr);
+  }
+
+  /**
+   * Translate JSON Method
+   * @param {Object} options
+   * @param {type.Model} parent
+   * @param {Object} methodNode
+   */
+  translateJsonMethod(options, parent, methodNode) {
+    // Skip destructors for now
+    if (methodNode.name.startsWith("~") && !methodNode.is_operator) {
+      return;
+    }
+    
+    // Create Operation
+    const _operation = new type.UMLOperation();
+    _operation._parent = parent;
+    _operation.name = methodNode.name;
+    _operation.visibility = this._getJsonVisibility(methodNode.access);
+    
+    // Set constructor flag
+    if (methodNode.is_constructor) {
+      this._addTag(_operation, type.Tag.TK_BOOLEAN, "constructor", true);
+    }
+    
+    // Set virtual flags
+    if (methodNode.is_virtual) {
+      _operation.isAbstract = false;
+      this._addTag(_operation, type.Tag.TK_BOOLEAN, "virtual", true);
+    }
+    
+    if (methodNode.is_pure_virtual) {
+      _operation.isAbstract = true;
+    }
+    
+    // Set static flag
+    if (methodNode.is_static) {
+      _operation.isStatic = true;
+    }
+    
+    // Set const flag
+    if (methodNode.is_const) {
+      this._addTag(_operation, type.Tag.TK_BOOLEAN, "const", true);
+    }
+    
+    // Process parameters
+    if (methodNode.parameters) {
+      for (const param of methodNode.parameters) {
+        const _param = new type.UMLParameter();
+        _param._parent = _operation;
+        _param.name = param.name || "";
+        _param.type = param.type;
+        _operation.parameters.push(_param);
+      }
+    }
+    
+    // Set return type for non-constructors
+    if (!methodNode.is_constructor) {
+      const returnParam = new type.UMLParameter();
+      returnParam._parent = _operation;
+      returnParam.name = "";
+      returnParam.type = methodNode.type;
+      returnParam.direction = type.UMLParameter.DK_RETURN;
+      _operation.parameters.push(returnParam);
+    }
+    
+    parent.operations.push(_operation);
+  }
+
+  /**
+   * Translate JSON Enum Node
+   * @param {Object} options
+   * @param {type.Model} namespace
+   * @param {Object} enumNode
+   */
+  translateJsonEnum(options, namespace, enumNode) {
+    // Create Enumeration
+    const _enum = new type.UMLEnumeration();
+    _enum._parent = namespace;
+    _enum.name = enumNode.name;
+    _enum.visibility = this._getJsonVisibility(enumNode.access);
+    
+    namespace.ownedElements.push(_enum);
+    
+    // Store enum ID to object mapping
+    if (enumNode.id) {
+      this._classIdMap[enumNode.id] = _enum;
+    }
+    
+    // Process enumerators
+    if (enumNode.enumerators) {
+      for (const enumItem of enumNode.enumerators) {
+        const _literal = new type.UMLEnumerationLiteral();
+        _literal._parent = _enum;
+        _literal.name = enumItem.name;
+        _enum.ownedElements.push(_literal);
+      }
+    }
+  }
+
+  /**
+   * Get visibility from JSON access level
+   * @param {string} access
+   * @return {string} Visibility constants for UML Elements
+   */
+  _getJsonVisibility(access) {
+    switch (access) {
+      case "public":
+        return type.UMLModelElement.VK_PUBLIC;
+      case "protected":
+        return type.UMLModelElement.VK_PROTECTED;
+      case "private":
+        return type.UMLModelElement.VK_PRIVATE;
+      default:
+        return type.UMLModelElement.VK_PACKAGE;
+    }
   }
 }
 
