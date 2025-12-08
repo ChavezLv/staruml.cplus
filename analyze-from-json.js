@@ -104,15 +104,11 @@ class JsonCodeAnalyzer {
    * @param {Object} options
    */
   generateDiagrams(options) {
-    if(this._collaboration){
-      var baseModel = app.repository.get(this._interaction._id);
-            baseModel.traverse((elem) => {
-            console.log("[JSON Reverse Engineer] Sequence diagram:elem:\n");
-            console.dir(elem, { depth: null, colors: true });
-            app.commands.execute("diagram-generator:sequence", elem, true);
-      });
-    }else{
     var baseModel = app.repository.get(this._root._id);
+    if (!baseModel) {
+      console.warn("[JSON Reverse Engineer] Base model not found, skipping diagram generation");
+      return;
+    }
     if (options.packageStructure) {
       app.commands.execute(
         "diagram-generator:package-structure",
@@ -155,7 +151,6 @@ class JsonCodeAnalyzer {
       });
     }
   }
-}
   
   /**
    * Rename the last generated diagram in the package
@@ -620,65 +615,191 @@ class JsonCodeAnalyzer {
   }
   
   /**
-   * Translate JSON Sequence Diagram to UML sequence diagram
-   * @param {Object} options
-   * @param {Object} sequenceDiagramJson
+   * Translate JSON to UML Sequence Diagram
+   * @param {Object} options - Options for the translation (for backward compatibility)
+   * @param {Object} sequenceDiagramJson - JSON object containing sequence diagram data
    */
   translateJsonSequenceDiagram(options, sequenceDiagramJson) {
-    // Create collaboration
-    const collaboration = new type.UMLCollaboration();
-    collaboration.name = sequenceDiagramJson.name || "Collaboration";
-    
-    // Create interaction
-    const interaction = new type.UMLInteraction();
-    interaction.name = "Interaction";
-    interaction._parent = collaboration;
-    collaboration.ownedElements.push(interaction);
- 
-    // Store references
-    this._collaboration = collaboration;
-    this._interaction = interaction;
-    
-    // Map to store participant ID to UMLClassifierRole
-    this._participantMap = {};
-    
-    // Create participants (UMLClassifierRole)
-    if (sequenceDiagramJson.participants) {
-      sequenceDiagramJson.participants.forEach((participant) => {
-        this._createParticipant(participant);
-      });
+    // Handle backward compatibility: if only one parameter is passed, use it as sequenceDiagramJson
+    if (!sequenceDiagramJson && typeof options === 'object') {
+      sequenceDiagramJson = options;
+      options = {};
     }
     
-    // Create messages
-    if (sequenceDiagramJson.sequences) {
-      sequenceDiagramJson.sequences.forEach((sequence) => {
-        if (sequence.messages) {
-          sequence.messages.forEach((messageJson) => {
-            this._createMessage(messageJson);
-          });
-        }
-      });
+    try {
+      console.log("[JSON Reverse Engineer] Translating JSON to sequence diagram...");
+      console.log("[JSON Reverse Engineer] Sequence diagram JSON:", sequenceDiagramJson);
+      
+      // Use OperationBuilder to manage changes
+      const builder = app.repository.getOperationBuilder();
+      builder.begin("add sequence diagram");
+      
+      // Prepare base model
+      let base = this._root || app.project.project;
+      
+      // Create collaboration
+      const collaboration = new type.UMLCollaboration();
+      collaboration.name = sequenceDiagramJson.name || "JSON Sequence Collaboration";
+      collaboration._parent = base;
+      builder.insert(collaboration);
+      builder.fieldInsert(base, "ownedElements", collaboration);
+      
+      // Create interaction
+      const interaction = new type.UMLInteraction();
+      interaction.name = sequenceDiagramJson.name || "JSON Sequence Interaction";
+      interaction._parent = collaboration;
+      builder.insert(interaction);
+      builder.fieldInsert(collaboration, "ownedElements", interaction);
+      
+      // Create sequence diagram
+      let diagram = new type.UMLSequenceDiagram();
+      diagram.name = sequenceDiagramJson.name || "JSON Sequence Diagram";
+      diagram._parent = interaction;
+      diagram.showActivation = false; // Disable activation to avoid activation view errors
+      diagram.showSequenceNumber = false; // Disable sequence numbers for simplicity
+      builder.insert(diagram);
+      builder.fieldInsert(interaction, "ownedElements", diagram);
+      
+      // Map to store participant ID to UMLLifeline
+      this._participantMap = {};
+      
+      // Store references
+      this._collaboration = collaboration;
+      this._interaction = interaction;
+      
+      // Create participants (UMLLifeline)
+      if (sequenceDiagramJson.participants) {
+        sequenceDiagramJson.participants.forEach((participant, i) => {
+          // Create role model (UMLAttribute) under collaboration
+          const roleName = `${participant.display_name}Role`;
+          const roleModel = new type.UMLAttribute();
+          roleModel.name = roleName;
+          roleModel._parent = this._collaboration;
+          builder.insert(roleModel);
+          builder.fieldInsert(this._collaboration, "attributes", roleModel);
+          
+          // Create lifeline model (UMLLifeline) using the role model
+            const lifeline = this._createParticipant(participant);
+            if (lifeline) {
+              lifeline.represent = roleModel;
+              lifeline._parent = this._interaction;
+              builder.insert(lifeline);
+              builder.fieldInsert(this._interaction, "participants", lifeline);
+
+              // Calculate position based on participant index
+              const lifelineX = 100 + (i * 150); // 150px interval between lifelines
+              const lifelineWidth = 70;
+              const lifelineCenterX = lifelineX + (lifelineWidth / 2);
+              
+              // Create lifeline view
+              let lifelineView = new type.UMLSeqLifelineView();
+              lifelineView._parent = diagram;
+              lifelineView.model = lifeline;
+              lifelineView.initialize(null, lifelineX, 40, lifelineX + lifelineWidth, 2040);
+              builder.insert(lifelineView);
+              builder.fieldInsert(diagram, "ownedViews", lifelineView);
+              
+              // Store view reference and position information for message view creation
+              const participantInfo = {
+                model: lifeline,
+                view: lifelineView,
+                centerX: lifelineCenterX
+              };
+              
+              if (participant.activities && participant.activities.length > 0) {
+                participant.activities.forEach(activity => {
+                  if (this._participantMap[activity.id]) {
+                    this._participantMap[activity.id] = participantInfo;
+                  }
+                });
+              } else if (this._participantMap[participant.id]) {
+                this._participantMap[participant.id] = participantInfo;
+              }
+          }
+        });
+      }
+      
+      // Create messages
+      if (sequenceDiagramJson.sequences) {
+        let messageIndex = 0;
+        sequenceDiagramJson.sequences.forEach((sequence) => {
+          if (sequence.messages) {
+            sequence.messages.forEach((messageJson) => {
+              const message = this._createMessage(messageJson);
+              if (message) {
+                message._parent = this._interaction;
+                builder.insert(message);
+                builder.fieldInsert(this._interaction, "messages", message);
+
+                // Create message view
+                const sourceParticipant = this._participantMap[messageJson.from.activity_id];
+                const targetParticipant = this._participantMap[messageJson.to.activity_id];
+                
+                if (sourceParticipant && targetParticipant && sourceParticipant.view && targetParticipant.view) {
+                  // Create message view correctly using linePart
+                  const sourceView = sourceParticipant.view;
+                  const targetView = targetParticipant.view;
+                  
+                  // Check if source and target views have linePart property
+                  if (!sourceView.linePart || !targetView.linePart) {
+                    console.error("[JSON Reverse Engineer] Source or target view missing linePart:", sourceView, targetView);
+                    return;
+                  }
+                  
+                  let msgView = new type.UMLSeqMessageView();
+                  msgView._parent = diagram;
+                  msgView.model = message;
+                  msgView.source = sourceView.linePart;
+                  msgView.target = targetView.linePart;
+                  
+                  // Calculate position based on message index
+                  const messageY = 100 + (messageIndex * 100); // 100px interval between messages
+                  
+                  // Use pre-calculated centerX instead of accessing bounds
+                  const sourceX = sourceParticipant.centerX;
+                  const targetX = targetParticipant.centerX;
+                  
+                  msgView.initialize(null, sourceX, messageY, targetX, messageY);
+                  builder.insert(msgView);
+                  builder.fieldInsert(diagram, "ownedViews", msgView);
+                  messageIndex++;
+                }
+              }
+            });
+          }
+        });
+      }
+      
+      // End the operation and execute it
+      builder.end();
+      var cmd = builder.getOperation();
+      app.repository.doOperation(cmd);
+      
+      // Get the updated diagram object from repository
+      diagram = app.repository.get(diagram._id);
+      
+      // Set as current diagram to ensure proper view initialization
+      if (diagram) {
+        app.diagrams.setCurrentDiagram(diagram);
+        console.log("[JSON Reverse Engineer] Sequence diagram generated successfully:", diagram.name);
+      } else {
+        console.error("[JSON Reverse Engineer] Failed to retrieve diagram from repository");
+      }
+    } catch (error) {
+      console.error("[JSON Reverse Engineer] Error translating JSON to sequence diagram:", error);
     }
-    
-    console.log("[JSON Reverse Engineer] Sequence diagram structure created:", collaboration.name);
   }
   
   /**
    * Create participant (UMLLifeline) from JSON
    * @param {Object} participantJson
+   * @returns {type.UMLLifeline} Created lifeline
    */
   _createParticipant(participantJson) {
     // Create participant as UMLLifeline
     const lifeline = new type.UMLLifeline();
     lifeline.name = participantJson.display_name;
     lifeline.selector = participantJson.name;
-    
-    // Add to interaction (not directly to sequence diagram)
-    lifeline._parent = this._interaction;
-    this._interaction.ownedElements.push(lifeline);
-    
-    // Also add to interaction's participants array
-    this._interaction.participants.push(lifeline);
     
     // Store reference in participant map using activity_id
     if (participantJson.activities && participantJson.activities.length > 0) {
@@ -692,59 +813,79 @@ class JsonCodeAnalyzer {
         });
       }
       
-      console.log("Created participant:", lifeline.name, "with activity_id:", activityId);
+      console.log("[JSON Reverse Engineer] Created participant:", lifeline.name, "with activity_id:", activityId);
     } else {
       // Fall back to participant ID if no activities
       this._participantMap[participantJson.id] = lifeline;
-      console.log("Created participant:", lifeline.name, "with participant_id:", participantJson.id);
+      console.log("[JSON Reverse Engineer] Created participant:", lifeline.name, "with participant_id:", participantJson.id);
     }
+    
+    return lifeline;
   }
   
   /**
    * Create a single message from JSON
    * @param {Object} messageJson
+   * @returns {type.UMLMessage|null} Created message or null if failed
    */
   _createMessage(messageJson) {
-    // Get source and target participants using activity_id
-    let sourceParticipant = null;
-    let targetParticipant = null;
-    
-    // Safely check for from and to properties
-    if (messageJson.from && messageJson.from.activity_id) {
-      sourceParticipant = this._participantMap[messageJson.from.activity_id];
-    } else {
-      console.warn("Message source or source.activity_id is undefined:", messageJson);
-      return;
-    }
-    
-    if (messageJson.to && messageJson.to.activity_id) {
-      targetParticipant = this._participantMap[messageJson.to.activity_id];
-    } else {
-      console.warn("Message target or target.activity_id is undefined:", messageJson);
-      return;
-    }
-    
-    if (sourceParticipant && targetParticipant) {
-      // Create message
-      const message = new type.UMLMessage();
-      message.name = messageJson.name;
-      message.source = sourceParticipant;
-      message.target = targetParticipant;
-      message.messageKind = type.UMLMessage.MK_SYNCH_CALL; // Default to synchronous call
+    try {
+      // Get source and target participants using activity_id
+      let sourceParticipant = null;
+      let targetParticipant = null;
       
-      // Add to interaction
-      message._parent = this._interaction;
-      this._interaction.ownedElements.push(message);
+      // Safely check for from and to properties
+      if (messageJson.from && messageJson.from.activity_id) {
+        sourceParticipant = this._participantMap[messageJson.from.activity_id];
+      } else {
+        console.warn("[JSON Reverse Engineer] Message source or source.activity_id is undefined:", messageJson);
+        return null;
+      }
       
-      // Also add to interaction's messages array
-      this._interaction.messages.push(message);
+      if (messageJson.to && messageJson.to.activity_id) {
+        targetParticipant = this._participantMap[messageJson.to.activity_id];
+      } else {
+        console.warn("[JSON Reverse Engineer] Message target or target.activity_id is undefined:", messageJson);
+        return null;
+      }
       
-      console.log("Created message:", messageJson.name, "from", sourceParticipant.name, "to", targetParticipant.name);
-    } else {
-      console.warn("Skipping message creation: source or target participant not found");
-      console.warn("Available participants in map:", Object.keys(this._participantMap));
-      console.warn("Message from activity_id:", messageJson.from.activity_id);
-      console.warn("Message to activity_id:", messageJson.to.activity_id);
+      if (sourceParticipant && targetParticipant) {
+        // Extract the model from the participant info
+        const sourceModel = sourceParticipant.model;
+        const targetModel = targetParticipant.model;
+        
+        // Create message
+        const message = new type.UMLMessage();
+        message.name = messageJson.name;
+        message.source = sourceModel;
+        message.target = targetModel;
+        
+        // Set message kind based on JSON data
+        if (messageJson.message_kind === "asynchronous") {
+          message.messageKind = type.UMLMessage.MK_ASYNCH_CALL;
+          message.messageSort = type.UMLMessage.MS_ASYNCHSIGNAL;
+        } else {
+          message.messageKind = type.UMLMessage.MK_SYNCH_CALL;
+          message.messageSort = type.UMLMessage.MS_CALL;
+        }
+        
+        // Set reply message properties if needed
+        if (messageJson.is_reply) {
+          message.messageSort = type.UMLMessage.MS_REPLY;
+        }
+        
+        console.log("[JSON Reverse Engineer] Created message:", messageJson.name, "from", sourceModel.name, "to", targetModel.name);
+        return message;
+      } else {
+        console.warn("[JSON Reverse Engineer] Skipping message creation: source or target participant not found");
+        console.warn("[JSON Reverse Engineer] Available participants in map:", Object.keys(this._participantMap));
+        console.warn("[JSON Reverse Engineer] Message from activity_id:", messageJson.from.activity_id);
+        console.warn("[JSON Reverse Engineer] Message to activity_id:", messageJson.to.activity_id);
+        return null;
+      }
+    } catch (error) {
+      console.error("[JSON Reverse Engineer] Error creating message:", error, messageJson);
+      return null;
     }
   }
   
